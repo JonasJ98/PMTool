@@ -1,0 +1,6 @@
+mpxj>=13
+JPype1>=1.5
+python-pptx>=1.0
+matplotlib>=3.8
+PySide6>=6.6
+pytest>=8

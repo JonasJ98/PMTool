@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mpptool"
+version = "0.2.0"
+description = "Auswertung, Historisierung und Bewertung von MS-Project-Dateien (.mpp) mit PJM-Review-Bericht"
+requires-python = ">=3.10"
+dependencies = [
+    "mpxj>=13",
+    "JPype1>=1.5",
+    "python-pptx>=1.0",
+    "matplotlib>=3.8",
+    "PySide6>=6.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyinstaller>=6"]
+
+[project.scripts]
+mpptool = "mpptool.main:main"
+mpptool-gui = "mpptool.gui.app:run"
+
+[tool.setuptools.packages.find]
+include = ["mpptool*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
