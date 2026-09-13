@@ -175,6 +175,13 @@ def _hold_flag_of(task: Any) -> bool:
     return val in config.HOLD_TEXT_VALUES
 
 
+def _cancel_flag_of(task: Any) -> bool:
+    if config.CANCEL_TEXT_FIELD_INDEX is None:
+        return False
+    val = _to_str(task.getText(config.CANCEL_TEXT_FIELD_INDEX)).strip().lower()
+    return val in config.CANCEL_TEXT_VALUES
+
+
 def task_to_record(task: Any, source_file: str, uid_prefix: str = "") -> TaskRecord:
     uid = f"{uid_prefix}{_to_str(task.getUniqueID())}"
     return TaskRecord(
@@ -193,6 +200,7 @@ def task_to_record(task: Any, source_file: str, uid_prefix: str = "") -> TaskRec
         source_file=source_file,
         outline_level=int(_to_float(task.getOutlineLevel()) or 1),
         hold_flag=_hold_flag_of(task),
+        cancel_flag=_cancel_flag_of(task),
     )
 
 

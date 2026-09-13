@@ -1,6 +1,7 @@
 """Statuslogik und Kennzahlen.
 
-Statusregeln (Stichtag = Snapshot-Datum):
+Statusregeln (Stichtag = Snapshot-Datum bzw. Auswertungstag):
+  Cancelled       – Aufgabe storniert (Cancel-Textfeld gesetzt)
   Hold            – Aufgabe inaktiv (Active = Nein) oder Hold-Textfeld gesetzt
   Closed          – abgeschlossen, tatsächliches Ende <= Referenzende
   Closed Overdue  – abgeschlossen, tatsächliches Ende >  Referenzende
@@ -8,6 +9,9 @@ Statusregeln (Stichtag = Snapshot-Datum):
   Open Overdue    – nicht abgeschlossen, geplantes Ende <  Stichtag
 
 Referenzende = Basisplan-Ende, sonst geplantes Ende.
+
+Aufgabe vs. Meilenstein (Übersicht): Dauer (Ende - Start) = 0 Tage -> Meilenstein,
+Dauer > 0 Tage -> Aufgabe (siehe ``TaskRecord.is_milestone_effective``).
 """
 from __future__ import annotations
 
@@ -46,6 +50,8 @@ def relevant_tasks(tasks: list[TaskRecord]) -> list[TaskRecord]:
 # Status
 # --------------------------------------------------------------------------
 def classify(task: TaskRecord, as_of: date) -> TaskStatus:
+    if task.cancel_flag:
+        return TaskStatus.CANCELLED
     if (config.USE_NATIVE_ACTIVE_FLAG_FOR_HOLD and not task.is_active) or task.hold_flag:
         return TaskStatus.HOLD
     reference_finish = task.baseline_finish or task.finish
@@ -82,6 +88,10 @@ class DepartmentStats:
     def overdue_total(self) -> int:
         return self.n(TaskStatus.OPEN_OVERDUE) + self.n(TaskStatus.CLOSED_OVERDUE)
 
+    @property
+    def cancelled_total(self) -> int:
+        return self.n(TaskStatus.CANCELLED)
+
 
 @dataclass
 class SnapshotMetrics:
@@ -95,6 +105,9 @@ class SnapshotMetrics:
     open_overdue: int
     closed_overdue: int
     hold: int
+    cancelled: int = 0        # Status Cancelled
+    tasks_count: int = 0      # Aufgaben (Dauer > 0 Tage)
+    milestones_count: int = 0  # Meilensteine (Dauer = 0 Tage)
 
     @property
     def fulfilment_pct(self) -> float:
@@ -111,6 +124,14 @@ class SnapshotMetrics:
     def departments(self) -> list[str]:
         return sorted(self.by_department)
 
+    @property
+    def label(self) -> str:
+        """Anzeigename des Stichtags dieser Kennzahlen (Auswertungstag für den
+        aktuellen Vergleichspunkt, sonst der historische Snapshot-Stichtag)."""
+        kw = self.as_of.isocalendar()[1]
+        base = f"KW{kw:02d} {self.as_of.isoformat()}"
+        return f"{base} – {self.snapshot.label}" if self.snapshot.label else base
+
     def overdue_by_department(self) -> dict[str, int]:
         return {d: s.n(TaskStatus.OPEN_OVERDUE) for d, s in self.by_department.items()}
 
@@ -124,6 +145,7 @@ def compute_metrics(snapshot: Snapshot, as_of: date | None = None) -> SnapshotMe
     statuses: dict[str, TaskStatus] = {}
     by_dep: dict[str, DepartmentStats] = {}
     planned_closed = actually_closed = open_overdue = closed_overdue = hold = 0
+    cancelled = tasks_count = milestones_count = 0
 
     for t in tasks:
         st = classify(t, as_of)
@@ -131,8 +153,13 @@ def compute_metrics(snapshot: Snapshot, as_of: date | None = None) -> SnapshotMe
         dep = canonical_department(t.department)
         by_dep.setdefault(dep, DepartmentStats(dep)).counts[st] += 1
 
+        if t.is_milestone_effective:
+            milestones_count += 1
+        else:
+            tasks_count += 1
+
         ref = t.baseline_finish or t.finish
-        if ref and ref <= as_of and st != TaskStatus.HOLD:
+        if ref and ref <= as_of and st not in (TaskStatus.HOLD, TaskStatus.CANCELLED):
             planned_closed += 1
         if st.is_closed:
             actually_closed += 1
@@ -142,12 +169,15 @@ def compute_metrics(snapshot: Snapshot, as_of: date | None = None) -> SnapshotMe
             closed_overdue += 1
         elif st == TaskStatus.HOLD:
             hold += 1
+        elif st == TaskStatus.CANCELLED:
+            cancelled += 1
 
     return SnapshotMetrics(
         snapshot=snapshot, as_of=as_of, statuses=statuses, by_department=by_dep,
         monitored=len(tasks), planned_closed=planned_closed,
         actually_closed=actually_closed, open_overdue=open_overdue,
-        closed_overdue=closed_overdue, hold=hold,
+        closed_overdue=closed_overdue, hold=hold, cancelled=cancelled,
+        tasks_count=tasks_count, milestones_count=milestones_count,
     )
 
 
@@ -157,8 +187,15 @@ def compute_metrics(snapshot: Snapshot, as_of: date | None = None) -> SnapshotMe
 @dataclass
 class OverdueTrendRow:
     department: str
-    previous: int
-    current: int
+    history: list[int]     # überfällige je Snapshot, chronologisch (inkl. aktuell)
+
+    @property
+    def previous(self) -> int:
+        return self.history[-2] if len(self.history) > 1 else 0
+
+    @property
+    def current(self) -> int:
+        return self.history[-1] if self.history else 0
 
     @property
     def delta(self) -> int:
@@ -172,15 +209,31 @@ class OverdueTrendRow:
             return "▼"
         return "►"
 
+    @property
+    def trend_arrow(self) -> str:
+        """Gesamttrend über die komplette Historie (erster vs. letzter Stand)."""
+        if len(self.history) < 2:
+            return "►"
+        diff = self.history[-1] - self.history[0]
+        if diff > 0:
+            return "▲"
+        if diff < 0:
+            return "▼"
+        return "►"
 
-def overdue_trend(previous: SnapshotMetrics | None, current: SnapshotMetrics,
-                  top_n: int | None = None) -> list[OverdueTrendRow]:
-    """Top-N Abteilungen nach aktuell überfälligen Aufgaben, mit Vorwoche."""
+
+def overdue_trend(metrics_list: list[SnapshotMetrics], top_n: int | None = None) -> list[OverdueTrendRow]:
+    """Top-N Abteilungen nach aktuell überfälligen Aufgaben, mit vollständiger
+    Trendhistorie über alle übergebenen (chronologisch sortierten) Snapshots."""
     top_n = top_n or config.TOP_N_OVERDUES
-    cur = current.overdue_by_department()
-    prev = previous.overdue_by_department() if previous else {}
-    deps = set(cur) | set(prev)
-    rows = [OverdueTrendRow(d, prev.get(d, 0), cur.get(d, 0)) for d in deps]
+    if not metrics_list:
+        return []
+    ordered = sorted(metrics_list, key=lambda m: m.as_of)
+    by_dep_per_snapshot = [m.overdue_by_department() for m in ordered]
+    deps: set[str] = set()
+    for d in by_dep_per_snapshot:
+        deps |= set(d)
+    rows = [OverdueTrendRow(d, [snap_od.get(d, 0) for snap_od in by_dep_per_snapshot]) for d in deps]
     rows.sort(key=lambda r: (-r.current, -r.previous, r.department))
     return [r for r in rows[:top_n] if r.current or r.previous]
 

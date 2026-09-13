@@ -26,7 +26,21 @@ COLORS = {
     TaskStatus.CLOSED: "#2ca02c",
     TaskStatus.CLOSED_OVERDUE: "#9467bd",
     TaskStatus.HOLD: "#7f7f7f",
+    TaskStatus.CANCELLED: "#c49a00",
 }
+
+_SPARK_CHARS = "▁▂▃▄▅▆▇█"
+
+
+def sparkline(values: list[int]) -> str:
+    """Kompakte Trenddarstellung als Unicode-Zeichenfolge (für Tabellen)."""
+    if not values:
+        return ""
+    lo, hi = min(values), max(values)
+    if hi == lo:
+        return _SPARK_CHARS[0] * len(values)
+    span = hi - lo
+    return "".join(_SPARK_CHARS[round((v - lo) / span * (len(_SPARK_CHARS) - 1))] for v in values)
 
 
 def _style(ax):
@@ -75,7 +89,8 @@ def draw_department_status(fig: Figure, m: SnapshotMetrics, title: str = "Aufgab
     fig.clear()
     ax = fig.add_subplot(111)
     deps = m.departments
-    order = [TaskStatus.CLOSED, TaskStatus.CLOSED_OVERDUE, TaskStatus.OPEN, TaskStatus.OPEN_OVERDUE, TaskStatus.HOLD]
+    order = [TaskStatus.CLOSED, TaskStatus.CLOSED_OVERDUE, TaskStatus.OPEN, TaskStatus.OPEN_OVERDUE,
+             TaskStatus.HOLD, TaskStatus.CANCELLED]
     bottom = [0] * len(deps)
     x = range(len(deps))
     for st in order:
@@ -86,7 +101,7 @@ def draw_department_status(fig: Figure, m: SnapshotMetrics, title: str = "Aufgab
         ax.annotate(str(tot), (xi, tot), ha="center", va="bottom", fontsize=8)
     ax.set_xticks(list(x), deps, rotation=45, ha="right")
     ax.set_ylabel("Aufgaben")
-    ax.set_title(f"{title} – {m.snapshot.display_name}", fontweight="bold", loc="left")
+    ax.set_title(f"{title} – Stand {m.as_of.isoformat()}", fontweight="bold", loc="left")
     ax.legend(fontsize=8, frameon=False, ncol=5, loc="upper right")
     _style(ax)
     fig.tight_layout()
@@ -104,9 +119,9 @@ def draw_overdue_by_department(fig: Figure, m: SnapshotMetrics, previous: Snapsh
     w = 0.38
     if previous:
         ax.bar([i - w / 2 for i in x], [prev.get(d, 0) for d in deps], width=w, color="#bbbbbb",
-               label=f"Vorwoche ({previous.snapshot.display_name.split()[0]})")
+               label=f"Letzter Stichtag ({previous.as_of.isoformat()})")
         ax.bar([i + w / 2 for i in x], [cur.get(d, 0) for d in deps], width=w, color=COLORS["overdue"],
-               label=f"Aktuell ({m.snapshot.display_name.split()[0]})")
+               label=f"Aktuell ({m.as_of.isoformat()})")
     else:
         ax.bar(x, [cur.get(d, 0) for d in deps], width=0.6, color=COLORS["overdue"], label="Überfällig")
     for i, d in enumerate(deps):
@@ -123,7 +138,7 @@ def draw_overdue_by_department(fig: Figure, m: SnapshotMetrics, previous: Snapsh
 
 
 def draw_overdue_trend_table(fig: Figure, rows: list[OverdueTrendRow], prev_label: str, cur_label: str,
-                             title: str = "Top-Overdues – Vorwoche vs. Aktuell") -> Figure:
+                             title: str = "Top-Overdues mit Trendanalyse – Letzter Stichtag vs. Aktuell") -> Figure:
     fig.clear()
     ax = fig.add_subplot(111)
     ax.axis("off")
@@ -131,9 +146,10 @@ def draw_overdue_trend_table(fig: Figure, rows: list[OverdueTrendRow], prev_labe
     if not rows:
         ax.text(0.5, 0.5, "Keine überfälligen Aufgaben", ha="center", va="center")
         return fig
-    cells = [[r.department, str(r.previous), str(r.current), f"{r.arrow} {r.delta:+d}"] for r in rows]
-    tbl = ax.table(cellText=cells, colLabels=["Fachabteilung", prev_label, cur_label, "Trend"],
-                   loc="center", cellLoc="center", colWidths=[0.4, 0.2, 0.2, 0.2])
+    cells = [[r.department, str(r.previous), str(r.current), f"{r.arrow} {r.delta:+d}", sparkline(r.history)]
+             for r in rows]
+    tbl = ax.table(cellText=cells, colLabels=["Fachabteilung", prev_label, cur_label, "Trend", "Verlauf"],
+                   loc="center", cellLoc="center", colWidths=[0.32, 0.16, 0.16, 0.16, 0.2])
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(10)
     tbl.scale(1, 1.6)

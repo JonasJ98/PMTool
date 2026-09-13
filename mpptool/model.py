@@ -12,6 +12,7 @@ class TaskStatus(str, Enum):
     CLOSED = "Closed"
     CLOSED_OVERDUE = "Closed Overdue"
     HOLD = "Hold"
+    CANCELLED = "Cancelled"
 
     @property
     def is_open(self) -> bool:
@@ -45,10 +46,27 @@ class TaskRecord:
     source_file: str = ""         # Dateiname (Master oder Unterdatei)
     outline_level: int = 1
     hold_flag: bool = False       # aus Textfeld, falls konfiguriert
+    cancel_flag: bool = False     # aus Textfeld, falls konfiguriert
 
     @property
     def is_complete(self) -> bool:
         return self.percent_complete >= 100 or self.actual_finish is not None
+
+    @property
+    def duration_days(self) -> int:
+        """Kalendertage zwischen Start und (geplantem) Ende."""
+        if self.start and self.finish:
+            return (self.finish - self.start).days
+        return 0
+
+    @property
+    def is_milestone_effective(self) -> bool:
+        """Unterscheidung Aufgabe/Meilenstein in der Übersicht: Dauer = 0 Tage ->
+        Meilenstein, Dauer > 0 Tage -> Aufgabe. Ohne Datumsbereich wird auf das
+        native MPXJ-Flag zurückgefallen."""
+        if self.start and self.finish:
+            return self.duration_days <= 0
+        return self.is_milestone
 
 
 @dataclass

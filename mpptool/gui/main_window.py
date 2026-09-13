@@ -265,8 +265,10 @@ class MainWindow(QMainWindow):
         if self.review:
             m = self.review.current
             self.statusBar().showMessage(
-                f"{self.review.cur_label}: {m.monitored} Aufgaben · {m.actually_closed}/{m.planned_closed} geschlossen "
-                f"({m.fulfilment_pct:.1f} %) · {m.open_overdue} überfällig · {m.hold} Hold · "
+                f"Stichtag {self.review.cur_label}: {m.monitored} Aufgaben "
+                f"({m.tasks_count} Aufgaben / {m.milestones_count} Meilensteine) · "
+                f"{m.actually_closed}/{m.planned_closed} geschlossen ({m.fulfilment_pct:.1f} %) · "
+                f"{m.open_overdue} überfällig · {m.hold} Hold · {m.cancelled} Cancelled · "
                 f"Vergleich zu {self.review.prev_label}")
 
     # --------------------------------------------------------------- Export

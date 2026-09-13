@@ -36,6 +36,7 @@ python -m mpptool.main import Plan.mpp --date 2026-09-04 --label "KW36"
 python -m mpptool.main list
 python -m mpptool.main delete 3 4
 python -m mpptool.main report --ids 5 6 --out output\review.pdf --name "Charging Cable"
+python -m mpptool.main report --report-date 2026-09-15   # Stichtag explizit setzen (Standard: heute)
 python -m mpptool.main demo-files .\demo     # Demo-Stände als MSPDI-XML (Master + Unterdatei)
 python -m mpptool.inspect_fields Plan.mpp     # belegte Textfelder / Ressourcengruppen anzeigen
 ```
@@ -58,10 +59,14 @@ python -m mpptool.inspect_fields Plan.mpp     # belegte Textfelder / Ressourceng
 
 ## Statuslogik
 
-Stichtag = Snapshot-Datum. Referenzende = Basisplan-Ende, sonst geplantes Ende.
+Stichtag = Snapshot-Datum; für den **aktuellen** Vergleichspunkt eines Berichts
+immer der **Auswertungstag** (Tag der Berichtserstellung, siehe unten) –
+unabhängig von der Kalenderwoche des zuletzt importierten Standes.
+Referenzende = Basisplan-Ende, sonst geplantes Ende.
 
 | Status | Regel |
 | --- | --- |
+| Cancelled | Aufgabe storniert (Cancel-Textfeld gesetzt, `config.CANCEL_TEXT_FIELD_INDEX`) |
 | Hold | Aufgabe inaktiv (`Active = Nein`) oder Hold-Textfeld gesetzt |
 | Closed | abgeschlossen, tatsächliches Ende ≤ Referenzende |
 | Closed Overdue | abgeschlossen, tatsächliches Ende > Referenzende |
@@ -70,6 +75,27 @@ Stichtag = Snapshot-Datum. Referenzende = Basisplan-Ende, sonst geplantes Ende.
 
 Erfüllungsgrad = tatsächlich geschlossen / laut Plan bis Stichtag geschlossen.
 Sammelvorgänge und externe Platzhalter werden herausgefiltert (konfigurierbar).
+
+### Aufgabe vs. Meilenstein (Übersicht)
+
+In der Übersicht wird zusätzlich zwischen Aufgaben und Meilensteinen unterschieden,
+anhand der Dauer (Ende − Start): Aufgaben > 0 Tage, Meilensteine = 0 Tage
+(`TaskRecord.is_milestone_effective`). Ohne Datumsbereich wird auf das native
+MPXJ-Milestone-Flag zurückgefallen.
+
+### Auswertungstag und Vergleich
+
+Das Reporting ist **KW-unabhängig**: Der Stichtag des aktuellen Vergleichspunkts
+ist immer der Tag, an dem der Bericht erzeugt wird (Auswertungstag = heute, per
+`--report-date` überschreibbar), nicht das interne Statusdatum der zuletzt
+importierten Datei. Der Vergleich erfolgt immer gegen den letzten (chronologisch
+vorherigen) Stichtag der ausgewählten Snapshots.
+
+### Top-Overdues mit Trendanalyse
+
+Die Top-N-Überfällig-Tabelle zeigt neben Vorwoche/Aktuell und Trendpfeil auch den
+Verlauf (Sparkline) der überfälligen Aufgaben je Fachabteilung über alle im
+Vergleich enthaltenen Snapshots.
 
 ## Weitergabe als .exe (Team-Test)
 

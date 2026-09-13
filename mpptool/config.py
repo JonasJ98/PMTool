@@ -56,6 +56,14 @@ HOLD_TEXT_FIELD_INDEX: int | None = None
 HOLD_TEXT_VALUES = {"hold", "on hold", "pausiert"}
 
 # --------------------------------------------------------------------------
+# Cancel-Erkennung
+# --------------------------------------------------------------------------
+# Textfeld, das bei entsprechendem Wert eine Aufgabe als storniert/abgebrochen
+# markiert (Status "Cancelled" in der Übersicht). None = nicht verwenden.
+CANCEL_TEXT_FIELD_INDEX: int | None = None
+CANCEL_TEXT_VALUES = {"cancel", "cancelled", "canceled", "storniert", "abgebrochen"}
+
+# --------------------------------------------------------------------------
 # Unterdateien (eingefügte Teilprojekte)
 # --------------------------------------------------------------------------
 EXPAND_SUBPROJECTS = True

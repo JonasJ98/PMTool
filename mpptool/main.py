@@ -78,7 +78,8 @@ def cmd_report(args) -> int:
             print("Keine Snapshots vorhanden – zuerst importieren oder `demo` ausführen.")
             return 1
         snaps = store.load_snapshots(ids)
-    rv = report.build_review(snaps, args.name)
+    report_date = date.fromisoformat(args.report_date) if args.report_date else None
+    rv = report.build_review(snaps, args.name, report_date=report_date)
     out = Path(args.out) if args.out else config.OUTPUT_DIR / f"review_{rv.cur_label}.pptx"
     if out.suffix.lower() == ".pdf":
         report.export_pdf(rv, out)
@@ -128,6 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--ids", type=int, nargs="*", help="Snapshot-IDs (Standard: alle)")
     s.add_argument("--out", help="Zieldatei .pptx oder .pdf")
     s.add_argument("--name", help="Projektname für den Bericht")
+    s.add_argument("--report-date", help="Auswertungstag/Stichtag YYYY-MM-DD (Standard: heute)")
     s.set_defaults(func=cmd_report)
 
     s = sub.add_parser("gui", help="Desktop-Oberfläche starten")

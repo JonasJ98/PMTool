@@ -32,6 +32,7 @@ class Review:
     timeline: list[TimelinePoint]
     trend_rows: list[OverdueTrendRow]
     overdue_list: list[TaskRecord]
+    report_date: date = field(default_factory=date.today)
     changes: dict[str, list[TaskRecord]] = field(default_factory=dict)
 
     @property
@@ -44,23 +45,30 @@ class Review:
 
     @property
     def prev_label(self) -> str:
-        return self.previous.snapshot.display_name.split()[0] if self.previous else "-"
+        return self.previous.as_of.isoformat() if self.previous else "-"
 
     @property
     def cur_label(self) -> str:
-        return self.current.snapshot.display_name.split()[0]
+        return self.current.as_of.isoformat()
 
 
-def build_review(snapshots: list[Snapshot], project_name: str | None = None) -> Review:
+def build_review(snapshots: list[Snapshot], project_name: str | None = None,
+                 report_date: date | None = None) -> Review:
+    """Baut den Bericht. Der aktuelle Vergleichspunkt wird immer zum Auswertungstag
+    (``report_date``, Standard: heute) bewertet – unabhängig von der Kalenderwoche
+    des zuletzt importierten Snapshots. Der Vergleich erfolgt stets gegen den
+    letzten (chronologisch vorherigen) Stichtag."""
     if not snapshots:
         raise ValueError("Mindestens ein Snapshot erforderlich")
+    report_date = report_date or date.today()
     snaps = sorted(snapshots, key=lambda s: (s.snapshot_date, s.snapshot_id or 0))
-    ms = [compute_metrics(s) for s in snaps]
+    ms = [compute_metrics(s) for s in snaps[:-1]]
+    ms.append(compute_metrics(snaps[-1], as_of=report_date))
     prev = ms[-2] if len(ms) > 1 else None
     name = project_name or Path(snaps[-1].source_file).stem
     return Review(
-        project_name=name, metrics=ms, timeline=timeline(ms),
-        trend_rows=overdue_trend(prev, ms[-1]), overdue_list=overdue_tasks(ms[-1]),
+        project_name=name, metrics=ms, timeline=timeline(ms), report_date=report_date,
+        trend_rows=overdue_trend(ms), overdue_list=overdue_tasks(ms[-1]),
         changes=task_changes(prev, ms[-1]),
     )
 
@@ -85,8 +93,9 @@ def figure_overdue_by_department(review: Review, fig: Figure | None = None) -> F
 
 def figure_trend_table(review: Review, fig: Figure | None = None) -> Figure:
     fig = fig or Figure(figsize=FIG_SIZE)
-    return charts.draw_overdue_trend_table(fig, review.trend_rows, review.prev_label, review.cur_label,
-                                           f"Top-{config.TOP_N_OVERDUES} Overdues – {review.prev_label} vs. {review.cur_label}")
+    return charts.draw_overdue_trend_table(
+        fig, review.trend_rows, review.prev_label, review.cur_label,
+        f"Top-{config.TOP_N_OVERDUES} Overdues mit Trendanalyse – {review.prev_label} vs. {review.cur_label}")
 
 
 def _overdue_rows(review: Review, limit: int = 18) -> list[list[str]]:
@@ -128,23 +137,27 @@ def figure_kpis(review: Review, fig: Figure | None = None) -> Figure:
     ax.axis("off")
     ax.set_title(f"{config.REPORT_TITLE} – {review.project_name}", fontweight="bold", loc="left", fontsize=16)
     kpis = [
-        ("Stichtag", m.as_of.isoformat()),
+        ("Stichtag (Auswertungstag)", m.as_of.isoformat()),
         ("Überwachte Aufgaben", str(m.monitored)),
+        ("davon Aufgaben (>0 Tage)", str(m.tasks_count)),
+        ("davon Meilensteine (0 Tage)", str(m.milestones_count)),
         ("Geplant geschlossen", str(m.planned_closed)),
         ("Tatsächlich geschlossen", str(m.actually_closed)),
         ("Erfüllungsgrad", f"{m.fulfilment_pct:.1f} %"),
         ("Überfällig (offen)", str(m.open_overdue)),
         ("Verspätet geschlossen", str(m.closed_overdue)),
         ("Hold", str(m.hold)),
+        ("Cancelled", str(m.cancelled)),
         ("Fachabteilungen", str(len(m.departments))),
         ("Snapshots im Vergleich", str(len(review.metrics))),
     ]
+    rows_per_col = 5
     for i, (k, v) in enumerate(kpis):
-        col, row = divmod(i, 5)
-        x = 0.05 + col * 0.5
-        y = 0.8 - row * 0.15
-        ax.text(x, y, k, fontsize=11, color="#555555", transform=ax.transAxes)
-        ax.text(x + 0.3, y, v, fontsize=14, fontweight="bold", transform=ax.transAxes)
+        col, row = divmod(i, rows_per_col)
+        x = 0.03 + col * 0.34
+        y = 0.8 - row * 0.16
+        ax.text(x, y, k, fontsize=10, color="#555555", transform=ax.transAxes)
+        ax.text(x + 0.24, y, v, fontsize=13, fontweight="bold", transform=ax.transAxes)
     return fig
 
 
@@ -201,10 +214,11 @@ def export_pptx(review: Review, path: str | Path) -> Path:
     s = prs.slides.add_slide(blank)
     _title(s, f"Übersicht – {review.cur_label}")
     m = review.current
-    kpi = [("Stichtag", m.as_of.isoformat()), ("Überwachte Aufgaben", m.monitored),
+    kpi = [("Stichtag (Auswertungstag)", m.as_of.isoformat()), ("Überwachte Aufgaben", m.monitored),
+           ("davon Aufgaben (>0 Tage)", m.tasks_count), ("davon Meilensteine (0 Tage)", m.milestones_count),
            ("Geplant geschlossen", m.planned_closed), ("Tatsächlich geschlossen", m.actually_closed),
            ("Erfüllungsgrad", f"{m.fulfilment_pct:.1f} %"), ("Überfällig (offen)", m.open_overdue),
-           ("Verspätet geschlossen", m.closed_overdue), ("Hold", m.hold)]
+           ("Verspätet geschlossen", m.closed_overdue), ("Hold", m.hold), ("Cancelled", m.cancelled)]
     _table(s, [["Kennzahl", "Wert"]] + [[k, str(v)] for k, v in kpi], Inches(0.6), Inches(1.3), Inches(6), [4.0, 2.0])
 
     # Chart-Folien
@@ -216,14 +230,15 @@ def export_pptx(review: Review, path: str | Path) -> Path:
         png = charts.figure_to_png(builder(review, Figure(figsize=FIG_SIZE)))
         _picture(s, png, Inches(0.4), Inches(1.2), Inches(12.5))
 
-    # Trend-Tabelle
+    # Trend-Tabelle (mit Verlaufs-/Trendanalyse über alle Snapshots)
     s = prs.slides.add_slide(blank)
-    _title(s, f"Top-{config.TOP_N_OVERDUES} Overdues – {review.prev_label} vs. {review.cur_label}")
-    rows = [["Fachabteilung", review.prev_label, review.cur_label, "Trend"]]
-    rows += [[r.department, str(r.previous), str(r.current), f"{r.arrow} {r.delta:+d}"] for r in review.trend_rows]
+    _title(s, f"Top-{config.TOP_N_OVERDUES} Overdues mit Trendanalyse – {review.prev_label} vs. {review.cur_label}")
+    rows = [["Fachabteilung", review.prev_label, review.cur_label, "Trend", "Verlauf"]]
+    rows += [[r.department, str(r.previous), str(r.current), f"{r.arrow} {r.delta:+d}", charts.sparkline(r.history)]
+             for r in review.trend_rows]
     if len(rows) == 1:
-        rows.append(["Keine überfälligen Aufgaben", "", "", ""])
-    _table(s, rows, Inches(0.6), Inches(1.3), Inches(8), [3.2, 1.6, 1.6, 1.6], font=14)
+        rows.append(["Keine überfälligen Aufgaben", "", "", "", ""])
+    _table(s, rows, Inches(0.6), Inches(1.3), Inches(9), [3.0, 1.4, 1.4, 1.4, 1.8], font=14)
 
     # Liste überfälliger Aufgaben
     s = prs.slides.add_slide(blank)
