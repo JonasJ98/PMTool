@@ -137,7 +137,12 @@ Exporte unter `Dokumente\mpptool` ab. Eine portable JRE wird im Ordner `jre` neb
 Der erste Start auf einem Rechner der Fachabteilungen ist zugleich der Packaging-Test
 aus ADR-001: Antivirus-/Endpoint-Meldungen dokumentieren.
 
-## Offene Punkte (siehe Backlog im Projekt)
+## Offene Punkte
+
+Führendes Backlog: [`docs/Backlog_MPP_Auswertungstool.docx`](docs/Backlog_MPP_Auswertungstool.docx)
+(zusätzlich als `.odt`). Bei Änderungen am Tool dort mitpflegen und mitcommitten;
+eine Kopie für den Auftraggeber liegt auf dem K:-Laufwerk.
+
 
 1. `DEPARTMENT_TEXT_FIELD_INDEX` an einer echten .mpp mit `inspect_fields` bestimmen.
 2. Import gegen echte Master-Datei mit Teilprojekten prüfen (Konsole/Dialog auf Warnungen achten).
