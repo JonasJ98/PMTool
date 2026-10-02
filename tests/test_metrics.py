@@ -64,3 +64,40 @@ def test_overdue_trend_and_changes():
     assert {t.uid for t in ch["newly_overdue"]} == {"2", "3"}
     assert {t.uid for t in ch["newly_closed"]} == {"1"}
     assert {t.uid for t in ch["added"]} == {"3"}
+
+
+def test_zero_duration_non_milestones_not_counted():
+    d = date(2026, 9, 1)
+    rec = lambda uid, **kw: TaskRecord(uid=uid, name=uid, department="AA", start=kw.pop("start", d), finish=d,
+                                       baseline_finish=None, actual_finish=None, percent_complete=0, **kw)
+    snap = Snapshot(snapshot_date=AS_OF, source_file="x.mpp", tasks=[
+        rec("task", start=date(2026, 8, 20)),           # Dauer > 0 (Datum)      -> Aufgabe
+        rec("one-day", duration=1.0),                   # 1-Tages-Aufgabe (MS-Project-Dauer) -> Aufgabe
+        rec("ms", is_milestone=True),                   # Meilenstein            -> Meilenstein
+        rec("sammel"),                                  # 0 Tage, kein Meilenstein -> nicht gezählt
+        rec("sammel-native", start=date(2026, 8, 20), duration=0.0),  # MS-Project-Dauer 0 -> nicht gezählt
+    ])
+    m = metrics.compute_metrics(snap)
+    assert set(m.statuses) == {"task", "one-day", "ms"}
+    assert (m.monitored, m.tasks_count, m.milestones_count) == (3, 2, 1)
+
+
+def test_overdue_trend_department_filter():
+    s = Snapshot(snapshot_date=AS_OF, source_file="a", tasks=[
+        task("1", date(2026, 9, 1), dep="AA"), task("2", date(2026, 9, 1), dep="SW"),
+        task("3", date(2026, 9, 1), dep="SW")])
+    m = metrics.compute_metrics(s)
+    assert [r.department for r in metrics.overdue_trend([m], departments={"AA"})] == ["AA"]
+    assert {t.uid for t in metrics.overdue_tasks(m, {"SW"})} == {"2", "3"}
+    assert metrics.all_departments([s]) == ["AA", "SW"]
+
+
+def test_finish_trend():
+    s1 = Snapshot(snapshot_date=date(2026, 8, 28), source_file="a", tasks=[
+        task("1", date(2026, 10, 1), baseline=date(2026, 10, 1)), task("2", date(2026, 9, 1))])
+    s2 = Snapshot(snapshot_date=AS_OF, source_file="b", tasks=[
+        task("1", date(2026, 10, 15), baseline=date(2026, 10, 1)),
+        task("9", date(2027, 1, 1), summary=True)])          # Sammelvorgang zählt nicht
+    pts = metrics.finish_trend([metrics.compute_metrics(s2), metrics.compute_metrics(s1)])
+    assert [p.expected_finish for p in pts] == [date(2026, 10, 1), date(2026, 10, 15)]
+    assert pts[-1].slip_vs_baseline == 14

@@ -10,12 +10,14 @@ Statusregeln (Stichtag = Snapshot-Datum bzw. Auswertungstag):
 
 Referenzende = Basisplan-Ende, sonst geplantes Ende.
 
-Aufgabe vs. Meilenstein (Übersicht): Dauer (Ende - Start) = 0 Tage -> Meilenstein,
-Dauer > 0 Tage -> Aufgabe (siehe ``TaskRecord.is_milestone_effective``).
+Gezählt werden nur Vorgänge mit Dauer > 0 (Aufgaben) sowie Meilensteine
+(MS-Project-Flag). Sammelvorgänge und sonstige 0-Tage-Vorgänge fallen heraus
+(siehe ``relevant_tasks`` / ``TaskRecord.is_countable``).
 """
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -42,8 +44,20 @@ def relevant_tasks(tasks: list[TaskRecord]) -> list[TaskRecord]:
             continue
         if config.EXCLUDE_EXTERNAL_PLACEHOLDERS and t.is_external:
             continue
+        if config.EXCLUDE_ZERO_DURATION_NON_MILESTONES and not t.is_countable:
+            continue
         out.append(t)
     return out
+
+
+def all_departments(snapshots: Iterable[Snapshot]) -> list[str]:
+    """Alle (kanonischen) Fachabteilungen/Ressourcengruppen der gezählten Aufgaben."""
+    return sorted({canonical_department(t.department) for s in snapshots for t in relevant_tasks(s.tasks)})
+
+
+def in_departments(department: str, departments: Collection[str] | None) -> bool:
+    """Gruppenauswahl: ``None`` = alle Gruppen."""
+    return departments is None or canonical_department(department) in departments
 
 
 # --------------------------------------------------------------------------
@@ -222,9 +236,11 @@ class OverdueTrendRow:
         return "►"
 
 
-def overdue_trend(metrics_list: list[SnapshotMetrics], top_n: int | None = None) -> list[OverdueTrendRow]:
+def overdue_trend(metrics_list: list[SnapshotMetrics], top_n: int | None = None,
+                  departments: Collection[str] | None = None) -> list[OverdueTrendRow]:
     """Top-N Abteilungen nach aktuell überfälligen Aufgaben, mit vollständiger
-    Trendhistorie über alle übergebenen (chronologisch sortierten) Snapshots."""
+    Trendhistorie über alle übergebenen (chronologisch sortierten) Snapshots.
+    ``departments`` beschränkt auf die ausgewählten Gruppen (None = alle)."""
     top_n = top_n or config.TOP_N_OVERDUES
     if not metrics_list:
         return []
@@ -232,7 +248,7 @@ def overdue_trend(metrics_list: list[SnapshotMetrics], top_n: int | None = None)
     by_dep_per_snapshot = [m.overdue_by_department() for m in ordered]
     deps: set[str] = set()
     for d in by_dep_per_snapshot:
-        deps |= set(d)
+        deps |= {dep for dep in d if in_departments(dep, departments)}
     rows = [OverdueTrendRow(d, [snap_od.get(d, 0) for snap_od in by_dep_per_snapshot]) for d in deps]
     rows.sort(key=lambda r: (-r.current, -r.previous, r.department))
     return [r for r in rows[:top_n] if r.current or r.previous]
@@ -261,6 +277,36 @@ def timeline(metrics_list: list[SnapshotMetrics]) -> list[TimelinePoint]:
     return pts
 
 
+@dataclass
+class FinishPoint:
+    """Erwartetes Projektende laut Datenstand eines Snapshots."""
+    snapshot_date: date
+    label: str
+    expected_finish: date | None   # spätestes geplantes Ende der gezählten Vorgänge
+    baseline_finish: date | None   # spätestes Basisplan-Ende (Referenz)
+
+    @property
+    def slip_vs_baseline(self) -> int | None:
+        if self.expected_finish and self.baseline_finish:
+            return (self.expected_finish - self.baseline_finish).days
+        return None
+
+
+def finish_trend(metrics_list: list[SnapshotMetrics]) -> list[FinishPoint]:
+    """Verlauf des erwarteten Projektendes über die Snapshots (chronologisch nach
+    Snapshot-Datum, da das Ende den Datenstand der jeweiligen Datei beschreibt)."""
+    pts = []
+    for m in sorted(metrics_list, key=lambda m: (m.snapshot.snapshot_date, m.snapshot.snapshot_id or 0)):
+        tasks = relevant_tasks(m.snapshot.tasks)
+        d = m.snapshot.snapshot_date
+        pts.append(FinishPoint(
+            snapshot_date=d, label=f"KW{d.isocalendar()[1]:02d}",
+            expected_finish=max((t.finish for t in tasks if t.finish), default=None),
+            baseline_finish=max((t.baseline_finish for t in tasks if t.baseline_finish), default=None),
+        ))
+    return pts
+
+
 def task_changes(previous: SnapshotMetrics | None, current: SnapshotMetrics) -> dict[str, list[TaskRecord]]:
     """Neu überfällig / neu geschlossen / neu hinzugekommen seit Vorwoche."""
     cur_tasks = {t.uid: t for t in relevant_tasks(current.snapshot.tasks)}
@@ -278,8 +324,9 @@ def task_changes(previous: SnapshotMetrics | None, current: SnapshotMetrics) -> 
     return {"newly_overdue": newly_overdue, "newly_closed": newly_closed, "added": added}
 
 
-def overdue_tasks(m: SnapshotMetrics) -> list[TaskRecord]:
+def overdue_tasks(m: SnapshotMetrics, departments: Collection[str] | None = None) -> list[TaskRecord]:
     tasks = {t.uid: t for t in relevant_tasks(m.snapshot.tasks)}
-    rows = [tasks[u] for u, s in m.statuses.items() if s == TaskStatus.OPEN_OVERDUE]
+    rows = [tasks[u] for u, s in m.statuses.items()
+            if s == TaskStatus.OPEN_OVERDUE and in_departments(tasks[u].department, departments)]
     rows.sort(key=lambda t: (t.finish or date.max, canonical_department(t.department), t.name))
     return rows

@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     outline_level    INTEGER NOT NULL,
     hold_flag        INTEGER NOT NULL,
     cancel_flag      INTEGER NOT NULL DEFAULT 0,
+    duration         REAL,
     PRIMARY KEY (snapshot_id, uid)
 );
 CREATE INDEX IF NOT EXISTS ix_tasks_snapshot ON tasks(snapshot_id);
@@ -60,11 +61,13 @@ class SnapshotStore:
 
     def _migrate(self) -> None:
         """Spalten ergänzen, die in älteren Datenbanken noch fehlen."""
-        try:
-            self.conn.execute("ALTER TABLE tasks ADD COLUMN cancel_flag INTEGER NOT NULL DEFAULT 0")
-            self.conn.commit()
-        except sqlite3.OperationalError:
-            pass  # Spalte existiert bereits
+        for ddl in ("ALTER TABLE tasks ADD COLUMN cancel_flag INTEGER NOT NULL DEFAULT 0",
+                    "ALTER TABLE tasks ADD COLUMN duration REAL"):
+            try:
+                self.conn.execute(ddl)
+                self.conn.commit()
+            except sqlite3.OperationalError:
+                pass  # Spalte existiert bereits
 
     # ------------------------------------------------------------------
     def close(self) -> None:
@@ -86,11 +89,13 @@ class SnapshotStore:
         )
         sid = cur.lastrowid
         cur.executemany(
-            "INSERT OR REPLACE INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO tasks(snapshot_id,uid,name,department,start,finish,baseline_finish,"
+            "actual_finish,percent_complete,is_summary,is_milestone,is_active,is_external,source_file,"
+            "outline_level,hold_flag,cancel_flag,duration) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(sid, t.uid, t.name, t.department, _d2s(t.start), _d2s(t.finish),
               _d2s(t.baseline_finish), _d2s(t.actual_finish), t.percent_complete,
               int(t.is_summary), int(t.is_milestone), int(t.is_active), int(t.is_external),
-              t.source_file, t.outline_level, int(t.hold_flag), int(t.cancel_flag)) for t in snap.tasks],
+              t.source_file, t.outline_level, int(t.hold_flag), int(t.cancel_flag), t.duration) for t in snap.tasks],
         )
         self.conn.commit()
         snap.snapshot_id = sid
@@ -116,13 +121,13 @@ class SnapshotStore:
         for t in self.conn.execute(
                 "SELECT uid,name,department,start,finish,baseline_finish,actual_finish,"
                 "percent_complete,is_summary,is_milestone,is_active,is_external,source_file,"
-                "outline_level,hold_flag,cancel_flag FROM tasks WHERE snapshot_id=? ORDER BY uid", (snapshot_id,)):
+                "outline_level,hold_flag,cancel_flag,duration FROM tasks WHERE snapshot_id=? ORDER BY uid", (snapshot_id,)):
             snap.tasks.append(TaskRecord(
                 uid=t[0], name=t[1], department=t[2], start=_s2d(t[3]), finish=_s2d(t[4]),
                 baseline_finish=_s2d(t[5]), actual_finish=_s2d(t[6]), percent_complete=t[7],
                 is_summary=bool(t[8]), is_milestone=bool(t[9]), is_active=bool(t[10]),
                 is_external=bool(t[11]), source_file=t[12], outline_level=t[13],
-                hold_flag=bool(t[14]), cancel_flag=bool(t[15])))
+                hold_flag=bool(t[14]), cancel_flag=bool(t[15]), duration=t[16]))
         return snap
 
     def load_snapshots(self, ids: list[int]) -> list[Snapshot]:

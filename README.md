@@ -76,12 +76,36 @@ Referenzende = Basisplan-Ende, sonst geplantes Ende.
 Erfüllungsgrad = tatsächlich geschlossen / laut Plan bis Stichtag geschlossen.
 Sammelvorgänge und externe Platzhalter werden herausgefiltert (konfigurierbar).
 
-### Aufgabe vs. Meilenstein (Übersicht)
+### Gezählte Vorgänge: Aufgabe vs. Meilenstein
 
-In der Übersicht wird zusätzlich zwischen Aufgaben und Meilensteinen unterschieden,
-anhand der Dauer (Ende − Start): Aufgaben > 0 Tage, Meilensteine = 0 Tage
-(`TaskRecord.is_milestone_effective`). Ohne Datumsbereich wird auf das native
-MPXJ-Milestone-Flag zurückgefallen.
+Gezählt werden nur **Aufgaben mit Dauer > 0** und **Meilensteine** (MS-Project-
+Meilenstein-Flag). Sammelvorgänge sowie sonstige Vorgänge mit Dauer 0, die kein
+Meilenstein sind (z. B. Sammelaufgaben ohne eigene Dauer), fallen aus allen
+Kennzahlen heraus (`config.EXCLUDE_ZERO_DURATION_NON_MILESTONES`,
+`TaskRecord.is_countable`).
+
+Die Dauer kommt aus dem MS-Project-Feld „Dauer“ (beim Import eingelesen), sodass
+auch 1-Tages-Aufgaben korrekt zählen. Snapshots, die vor dieser Umstellung
+importiert wurden, haben das Feld nicht; dort wird auf Ende − Start (Kalendertage)
+zurückgefallen – 1-Tages-Aufgaben fallen dann heraus. Für korrekte Zahlen solche
+Snapshots einmal neu importieren.
+
+### Ressourcengruppen-Auswahl
+
+In der GUI listet „Ressourcengruppen“ (unten links) alle Gruppen der angekreuzten
+Snapshots. Die An-/Abwahl wirkt sofort auf die Vorschau und gleichermaßen auf den
+Export, und zwar auf die Gruppen-Folien: Aufgaben je Fachabteilung, Überfällige je
+Fachabteilung, Top-Overdues und Liste überfälliger Aufgaben (Titelzusatz
+„Auswahl: n von m Gruppen“). Übersicht und Master Timeline zeigen weiterhin das
+Gesamtprojekt.
+
+### Projektende-Trend
+
+Folie „Projektende-Trend“: erwartetes Projektende je Snapshot = spätestes geplantes
+Ende aller gezählten Vorgänge im Datenstand der Datei, chronologisch nach
+Snapshot-Datum. An jedem Punkt stehen Datum und Verschiebung zum vorherigen Stand
+in Tagen; gestrichelt das späteste Basisplan-Ende als Referenz (falls vorhanden).
+Die Folie zeigt immer das Gesamtprojekt (unabhängig von der Gruppenauswahl).
 
 ### Auswertungstag und Vergleich
 

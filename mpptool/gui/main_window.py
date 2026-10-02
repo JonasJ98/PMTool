@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDateEdit, QDial
                                QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSplitter,
                                QStatusBar, QTabWidget, QVBoxLayout, QWidget)
 
-from .. import config, demo_data, report
+from .. import config, demo_data, metrics, report
 from ..model import Snapshot
 from ..snapshot_store import SnapshotStore
 
@@ -21,15 +21,20 @@ from ..snapshot_store import SnapshotStore
 class ImportDialog(QDialog):
     """Stichtag und Bezeichnung für einen Import abfragen."""
 
-    def __init__(self, file: Path, default_date: date | None, parent=None):
+    def __init__(self, file: Path, default_date: date | None, parent=None, date_source: str = ""):
         super().__init__(parent)
         self.setWindowTitle("Snapshot importieren")
         form = QFormLayout(self)
         form.addRow("Datei:", QLabel(file.name))
         self.date_edit = QDateEdit(calendarPopup=True)
+        self.date_edit.setDisplayFormat("dd.MM.yyyy")
         d = default_date or date.today()
         self.date_edit.setDate(QDate(d.year, d.month, d.day))
         form.addRow("Stichtag:", self.date_edit)
+        hint = f"Vorschlag {d.strftime('%d.%m.%Y')}" + (f" ({date_source})" if date_source else "")
+        hint_label = QLabel(f"{hint} – mit OK bestätigen oder ändern")
+        hint_label.setStyleSheet("color: #666666")
+        form.addRow("", hint_label)
         self.label_edit = QLineEdit()
         self.label_edit.setPlaceholderText("z. B. Wochenreview")
         form.addRow("Bezeichnung:", self.label_edit)
@@ -77,6 +82,8 @@ class MainWindow(QMainWindow):
         self.resize(1400, 850)
         self.store = SnapshotStore(db_path)
         self.review: report.Review | None = None
+        self._snap_cache: dict[int, Snapshot] = {}
+        self._filling_groups = False
         self._build_ui()
         self._build_menu()
         self.refresh_snapshot_list()
@@ -102,6 +109,7 @@ class MainWindow(QMainWindow):
         ll.addWidget(QLabel("<b>2. Vergleichsauswahl</b> – Snapshots ankreuzen (letzter = aktuell)"))
         self.list = QListWidget()
         self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.list.itemChanged.connect(self.refresh_group_list)
         ll.addWidget(self.list, 1)
         row2 = QHBoxLayout()
         b_all = QPushButton("Alle")
@@ -121,6 +129,24 @@ class MainWindow(QMainWindow):
         self.name_edit.setPlaceholderText("Projektname im Bericht")
         form.addRow("Projekt:", self.name_edit)
         ll.addLayout(form)
+
+        self.group_label = QLabel()
+        ll.addWidget(self.group_label)
+        self.group_list = QListWidget()
+        self.group_list.setToolTip("Wirkt auf die Gruppen-Folien in Vorschau und Export: Aufgaben/Überfällige "
+                                   "je Fachabteilung, Top-Overdues, Liste überfälliger Aufgaben")
+        self.group_list.itemChanged.connect(self._on_group_changed)
+        ll.addWidget(self.group_list, 1)
+        row_g = QHBoxLayout()
+        g_all = QPushButton("Alle")
+        g_all.clicked.connect(lambda: self._check_all_groups(True))
+        g_none = QPushButton("Keine")
+        g_none.clicked.connect(lambda: self._check_all_groups(False))
+        row_g.addWidget(g_all)
+        row_g.addWidget(g_none)
+        row_g.addStretch()
+        ll.addLayout(row_g)
+        self._update_group_label()
 
         ll.addWidget(QLabel("<b>3. Vorschau</b>"))
         self.btn_preview = QPushButton("Vorschau aktualisieren")
@@ -185,6 +211,7 @@ class MainWindow(QMainWindow):
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if (s.snapshot_id in checked or check_new) else Qt.Unchecked)
             self.list.addItem(item)
+        self.refresh_group_list()
 
     def _check_all(self, state: bool) -> None:
         for i in range(self.list.count()):
@@ -211,7 +238,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Import fehlgeschlagen", str(exc))
             return
-        dlg = ImportDialog(p, snap.snapshot_date, self)
+        dlg = ImportDialog(p, snap.snapshot_date, self, snap.date_source)
         if dlg.exec() != QDialog.Accepted:
             return
         snap.snapshot_date = dlg.snapshot_date
@@ -246,17 +273,71 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self, "Löschen", f"{len(items)} Snapshot(s) endgültig löschen?") != QMessageBox.Yes:
             return
         for it in items:
-            self.store.delete_snapshot(it.data(Qt.UserRole))
+            sid = it.data(Qt.UserRole)
+            self.store.delete_snapshot(sid)
+            self._snap_cache.pop(sid, None)
         self.refresh_snapshot_list()
+
+    def _checked_snapshots(self) -> list[Snapshot]:
+        snaps = []
+        for sid in self.checked_ids():
+            if sid not in self._snap_cache:
+                self._snap_cache[sid] = self.store.load_snapshot(sid)
+            snaps.append(self._snap_cache[sid])
+        return sorted(snaps, key=lambda s: (s.snapshot_date, s.snapshot_id))
+
+    # ---------------------------------------------------- Ressourcengruppen
+    def refresh_group_list(self, *_args) -> None:
+        """Gruppen der angekreuzten Snapshots auflisten; bisherige An-/Abwahl bleibt
+        erhalten, neu hinzukommende Gruppen sind angekreuzt."""
+        previous = {self.group_list.item(i).text(): self.group_list.item(i).checkState()
+                    for i in range(self.group_list.count())}
+        self._filling_groups = True
+        try:
+            self.group_list.clear()
+            for dep in metrics.all_departments(self._checked_snapshots()):
+                item = QListWidgetItem(dep)
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(previous.get(dep, Qt.Checked))
+                self.group_list.addItem(item)
+        finally:
+            self._filling_groups = False
+        self._update_group_label()
+
+    def _check_all_groups(self, state: bool) -> None:
+        self._filling_groups = True
+        try:
+            for i in range(self.group_list.count()):
+                self.group_list.item(i).setCheckState(Qt.Checked if state else Qt.Unchecked)
+        finally:
+            self._filling_groups = False
+        self._on_group_changed()
+
+    def selected_groups(self) -> set[str] | None:
+        """Angekreuzte Gruppen; None, wenn alle angekreuzt sind (= kein Filter)."""
+        items = [self.group_list.item(i) for i in range(self.group_list.count())]
+        checked = {it.text() for it in items if it.checkState() == Qt.Checked}
+        return None if len(checked) == len(items) else checked
+
+    def _update_group_label(self) -> None:
+        n = self.group_list.count()
+        k = sum(1 for i in range(n) if self.group_list.item(i).checkState() == Qt.Checked)
+        self.group_label.setText(f"<b>Ressourcengruppen</b> – {k} von {n} ausgewählt (Gruppen-Folien)")
+
+    def _on_group_changed(self, *_args) -> None:
+        if self._filling_groups:
+            return
+        self._update_group_label()
+        if self.review is not None and self.checked_ids():
+            self.update_preview()
 
     # ------------------------------------------------------------- Vorschau
     def _build_review(self) -> report.Review | None:
-        ids = self.checked_ids()
-        if not ids:
+        if not self.checked_ids():
             QMessageBox.information(self, "Vorschau", "Bitte mindestens einen Snapshot ankreuzen.")
             return None
-        snaps: list[Snapshot] = self.store.load_snapshots(ids)
-        return report.build_review(snaps, self.name_edit.text().strip() or None)
+        return report.build_review(self._checked_snapshots(), self.name_edit.text().strip() or None,
+                                   departments=self.selected_groups())
 
     def update_preview(self) -> None:
         self.review = self._build_review()
@@ -273,10 +354,11 @@ class MainWindow(QMainWindow):
 
     # --------------------------------------------------------------- Export
     def export(self, kind: str) -> None:
+        # immer mit der aktuellen Snapshot- und Gruppenauswahl neu aufbauen,
+        # damit Export und Vorschau übereinstimmen
+        self.update_preview()
         if self.review is None:
-            self.update_preview()
-            if self.review is None:
-                return
+            return
         default = config.OUTPUT_DIR / f"review_{self.review.cur_label}.{kind}"
         flt = "PowerPoint (*.pptx)" if kind == "pptx" else "PDF (*.pdf)"
         path, _ = QFileDialog.getSaveFileName(self, "Exportieren", str(default), flt)

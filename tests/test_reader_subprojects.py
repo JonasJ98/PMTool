@@ -85,3 +85,29 @@ def test_mspdi_roundtrip_via_mpxj(tmp_path):
     assert got.open_overdue == mem.open_overdue
     assert got.actually_closed == mem.actually_closed
     assert any(t.source_file.startswith("Sub_SW_TEST") for t in snap.tasks)
+
+
+def test_date_from_filename():
+    assert reader.date_from_filename("2022_11_24_CCC.mpp") == date(2022, 11, 24)
+    assert reader.date_from_filename("Plan-2023-01-05.mpp") == date(2023, 1, 5)
+    assert reader.date_from_filename("CCC_20221202.mpp") == date(2022, 12, 2)
+    assert reader.date_from_filename("Stand 24.11.2022.mpp") == date(2022, 11, 24)
+    assert reader.date_from_filename("Master_Demo_KW11.xml") is None
+    assert reader.date_from_filename("2022_13_45.mpp") is None
+
+
+def test_suggest_snapshot_date(tmp_path):
+    class Props:
+        def getStatusDate(self): return date(2022, 3, 18)
+        def getCurrentDate(self): return date(2026, 10, 2)
+
+    class Proj:
+        def getProjectProperties(self): return Props()
+
+    f = tmp_path / "2022_11_24_CCC.mpp"
+    f.write_bytes(b"x")
+    assert reader.suggest_snapshot_date(f, Proj()) == (date(2022, 11, 24), "aus Dateiname")
+    g = tmp_path / "CCC.mpp"
+    g.write_bytes(b"x")
+    assert reader.suggest_snapshot_date(g, Proj()) == (date(2022, 3, 18), "Statusdatum der Datei")
+    assert reader.suggest_snapshot_date(g)[1] == "Änderungsdatum der Datei"

@@ -33,7 +33,8 @@ def cmd_import(args) -> int:
         print("WARNUNG:", w)
     with _store(args) as store:
         sid = store.add_snapshot(snap)
-    print(f"Snapshot #{sid} importiert: {snap.display_name}, {len(snap.tasks)} Aufgaben")
+    src = f" (Stichtag {snap.date_source})" if snap.date_source and not args.date else ""
+    print(f"Snapshot #{sid} importiert: {snap.display_name}{src}, {len(snap.tasks)} Aufgaben")
     return 0
 
 

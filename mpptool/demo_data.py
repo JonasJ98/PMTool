@@ -117,6 +117,8 @@ def write_demo_files(out_dir: str | Path, weeks: int = 6, seed: int = 42) -> lis
     ProjectFile = _mpxj_class("ProjectFile")
     Writer = _mpxj_class("writer.UniversalProjectWriter")
     FileFormat = _mpxj_class("writer.FileFormat")
+    Duration = _mpxj_class("Duration")
+    TimeUnit = _mpxj_class("TimeUnit")
 
     def ldt(d: date | None, hour: int):
         return None if d is None else LocalDateTime.of(d.year, d.month, d.day, hour, 0)
@@ -127,6 +129,7 @@ def write_demo_files(out_dir: str | Path, weeks: int = 6, seed: int = 42) -> lis
         jt.setText(config.DEPARTMENT_TEXT_FIELD_INDEX, t.department)
         jt.setStart(ldt(t.start, 8))
         jt.setFinish(ldt(t.finish, 17))
+        jt.setDuration(Duration.getInstance(jpype.JDouble(float(t.duration_days)), TimeUnit.DAYS))
         if t.baseline_finish:
             jt.setBaselineFinish(ldt(t.baseline_finish, 17))
         if t.actual_finish:

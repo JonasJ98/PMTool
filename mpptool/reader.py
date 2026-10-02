@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -168,6 +169,26 @@ def _department_of(task: Any) -> str:
     return ""
 
 
+def _duration_days_of(task: Any) -> float | None:
+    """MS-Project-Feld "Dauer" in Tagen (Arbeitstage laut Projektkalender).
+    None, falls nicht ermittelbar – dann greift der Datums-Fallback."""
+    try:
+        dur = task.getDuration()
+    except Exception:
+        return None
+    if dur is None:
+        return None
+    try:
+        props = task.getParentFile().getProjectProperties()
+        dur = dur.convertUnits(_mpxj_class("TimeUnit").DAYS, props)
+    except Exception:
+        pass  # Einheit unverändert lassen – für "Dauer > 0" genügt das Vorzeichen
+    try:
+        return float(dur.getDuration())
+    except Exception:
+        return None
+
+
 def _hold_flag_of(task: Any) -> bool:
     if config.HOLD_TEXT_FIELD_INDEX is None:
         return False
@@ -201,6 +222,7 @@ def task_to_record(task: Any, source_file: str, uid_prefix: str = "") -> TaskRec
         outline_level=int(_to_float(task.getOutlineLevel()) or 1),
         hold_flag=_hold_flag_of(task),
         cancel_flag=_cancel_flag_of(task),
+        duration=_duration_days_of(task),
     )
 
 
@@ -219,7 +241,8 @@ def resolve_subproject_path(stored_path: str, master_dir: Path,
     direct = Path(raw)
     if direct.is_absolute():
         candidates.append(direct)
-    basename = Path(raw).name
+    # nicht Path(raw).name: "//server/datei.mpp" gilt unter Windows als UNC-Wurzel ohne Namen
+    basename = raw.split("/")[-1]
     dirs = [master_dir, *search_dirs]
     for d in dirs:
         candidates.append(Path(d) / basename)
@@ -298,20 +321,49 @@ def read_snapshot(path: str | os.PathLike, snapshot_date: date | None = None,
     warnings: list[str] = []
     records = extract_records(project, p.name, master_dir=p.parent, warnings=warnings)
 
+    source = "vorgegeben"
     if snapshot_date is None:
-        snapshot_date = _status_date_of(project) or date.fromtimestamp(p.stat().st_mtime)
+        snapshot_date, source = suggest_snapshot_date(p, project)
 
-    snap = Snapshot(snapshot_date=snapshot_date, source_file=p.name, tasks=records, label=label)
+    snap = Snapshot(snapshot_date=snapshot_date, source_file=p.name, tasks=records, label=label,
+                    date_source=source)
     return snap, warnings
+
+
+# Datum im Dateinamen: 2022_11_24, 2022-11-24, 2022.11.24, 20221124 oder 24.11.2022
+_NAME_DATE_PATTERNS = (
+    (re.compile(r"(?<!\d)(20\d{2})[_\-. ]?(\d{2})[_\-. ]?(\d{2})(?!\d)"), (1, 2, 3)),
+    (re.compile(r"(?<!\d)(\d{2})[_\-.](\d{2})[_\-.](20\d{2})(?!\d)"), (3, 2, 1)),
+)
+
+
+def date_from_filename(name: str) -> date | None:
+    for rx, (yi, mi, di) in _NAME_DATE_PATTERNS:
+        for m in rx.finditer(name):
+            try:
+                return date(int(m.group(yi)), int(m.group(mi)), int(m.group(di)))
+            except ValueError:
+                continue
+    return None
+
+
+def suggest_snapshot_date(path: Path, project: Any = None) -> tuple[date, str]:
+    """Stichtag für den Import vorschlagen (im Dialog bestätigen oder ändern).
+
+    Reihenfolge: Datum im Dateinamen -> Statusdatum der Datei -> Änderungsdatum
+    der Datei. Das MS-Project-"Aktuelle Datum" wird bewusst nicht verwendet –
+    es entspricht meist dem Tag, an dem die Datei zuletzt geöffnet wurde."""
+    d = date_from_filename(path.name)
+    if d:
+        return d, "aus Dateiname"
+    d = _status_date_of(project) if project is not None else None
+    if d:
+        return d, "Statusdatum der Datei"
+    return date.fromtimestamp(path.stat().st_mtime), "Änderungsdatum der Datei"
 
 
 def _status_date_of(project: Any) -> date | None:
     try:
-        props = project.getProjectProperties()
-        for getter in ("getStatusDate", "getCurrentDate"):
-            d = _to_date(getattr(props, getter)())
-            if d:
-                return d
+        return _to_date(project.getProjectProperties().getStatusDate())
     except Exception:
-        pass
-    return None
+        return None

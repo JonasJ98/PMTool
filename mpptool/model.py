@@ -47,26 +47,42 @@ class TaskRecord:
     outline_level: int = 1
     hold_flag: bool = False       # aus Textfeld, falls konfiguriert
     cancel_flag: bool = False     # aus Textfeld, falls konfiguriert
+    duration: float | None = None  # MS-Project-Dauer in Tagen (None = ältere Snapshots)
 
     @property
     def is_complete(self) -> bool:
         return self.percent_complete >= 100 or self.actual_finish is not None
 
     @property
-    def duration_days(self) -> int:
-        """Kalendertage zwischen Start und (geplantem) Ende."""
+    def duration_days(self) -> float:
+        """Dauer in Tagen: MS-Project-Feld "Dauer", falls eingelesen, sonst
+        Kalendertage zwischen Start und (geplantem) Ende (ältere Snapshots)."""
+        if self.duration is not None:
+            return self.duration
         if self.start and self.finish:
             return (self.finish - self.start).days
         return 0
 
     @property
+    def has_duration(self) -> bool:
+        """Dauer > 0 – Voraussetzung, um als Aufgabe gezählt zu werden. Ohne
+        Dauer und Datumsbereich wird das native Meilenstein-Flag herangezogen."""
+        if self.duration is None and not (self.start and self.finish):
+            return not self.is_milestone
+        return self.duration_days > 0
+
+    @property
+    def is_countable(self) -> bool:
+        """Gezählt werden Aufgaben mit Dauer > 0 und echte Meilensteine
+        (MS-Project-Flag). Übrige 0-Tage-Vorgänge – z. B. Sammelaufgaben ohne
+        eigene Dauer – zählen nicht."""
+        return self.has_duration or self.is_milestone
+
+    @property
     def is_milestone_effective(self) -> bool:
-        """Unterscheidung Aufgabe/Meilenstein in der Übersicht: Dauer = 0 Tage ->
-        Meilenstein, Dauer > 0 Tage -> Aufgabe. Ohne Datumsbereich wird auf das
-        native MPXJ-Flag zurückgefallen."""
-        if self.start and self.finish:
-            return self.duration_days <= 0
-        return self.is_milestone
+        """Unterscheidung Aufgabe/Meilenstein in der Übersicht: Dauer > 0 ->
+        Aufgabe, sonst Meilenstein (nur für gezählte Vorgänge relevant)."""
+        return not self.has_duration
 
 
 @dataclass
@@ -79,6 +95,7 @@ class Snapshot:
     snapshot_id: int | None = None
     label: str = ""
     imported_at: str = ""
+    date_source: str = ""   # Herkunft des vorgeschlagenen Stichtags (nur Anzeige, nicht gespeichert)
 
     @property
     def display_name(self) -> str:

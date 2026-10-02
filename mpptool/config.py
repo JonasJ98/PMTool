@@ -78,6 +78,9 @@ MAX_SUBPROJECT_DEPTH = 3
 # --------------------------------------------------------------------------
 EXCLUDE_SUMMARY_TASKS = True
 EXCLUDE_MILESTONES = False
+# Vorgänge mit Dauer 0, die kein Meilenstein sind (z. B. Sammelaufgaben ohne
+# eigene Dauer), nicht zählen. Gezählt wird nur Dauer > 0 oder Meilenstein.
+EXCLUDE_ZERO_DURATION_NON_MILESTONES = True
 # Platzhalter-Zeilen für externe Aufgaben (MS Project "External Task")
 EXCLUDE_EXTERNAL_PLACEHOLDERS = True
 
