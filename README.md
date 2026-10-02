@@ -134,6 +134,13 @@ Die gepackte Anwendung legt ihre Datenbank unter `%LOCALAPPDATA%\mpptool\data` u
 Exporte unter `Dokumente\mpptool` ab. Eine portable JRE wird im Ordner `jre` neben der
 .exe gesucht (alternativ Umgebungsvariable `MPPTOOL_JRE`).
 
+**Bereitstellung auf einem Netzlaufwerk:** den Ordner `dist\mpptool-gui` und
+`deploy\MPP-Tool starten.cmd` nebeneinander ablegen. Nutzer starten per Doppelklick auf
+die `.cmd`: Sie spiegelt die Anwendung nach `%LOCALAPPDATA%\mpptoolpp` (beim ersten Mal
+komplett, danach nur geänderte Dateien) und startet sie lokal – ein direkter Start der
+`.exe` vom Netzlaufwerk ist bei langsamer Verbindung (VPN) sehr träge. Für ein Update
+genügt es, den Ordner `mpptool-gui` auf dem Netzlaufwerk zu ersetzen.
+
 Der erste Start auf einem Rechner der Fachabteilungen ist zugleich der Packaging-Test
 aus ADR-001: Antivirus-/Endpoint-Meldungen dokumentieren.
 
