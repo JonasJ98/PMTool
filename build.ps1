@@ -1,4 +1,4 @@
-# Erzeugt eine verteilbare Windows-Anwendung:  dist\mpptool-gui\mpptool-gui.exe
+﻿# Erzeugt eine verteilbare Windows-Anwendung:  dist\mpptool-gui\mpptool-gui.exe
 # (+ portable JRE, sodass auf den Zielrechnern KEIN Java installiert sein muss)
 #
 # Aufruf in PowerShell im Projektordner:   .\build.ps1
