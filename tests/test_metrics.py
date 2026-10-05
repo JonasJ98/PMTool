@@ -150,3 +150,25 @@ def test_duplicate_wbs_scope_file(monkeypatch):
                        actual_finish=None, percent_complete=0, source_file=src, wbs="1.1", duration=1.0)
             for u, src in (("a", "m.mpp"), ("b", "sub.mpp"))]
     assert metrics.data_quality_warnings(recs) == []
+
+
+def test_master_timeline_weeks():
+    from datetime import timedelta
+    s1 = Snapshot(snapshot_date=date(2026, 8, 28), source_file="a", tasks=[
+        task("1", date(2026, 8, 20), 100, actual=date(2026, 8, 20)), task("2", date(2026, 9, 1))])
+    s2 = Snapshot(snapshot_date=AS_OF, source_file="b", tasks=[
+        task("1", date(2026, 8, 20), 100, actual=date(2026, 8, 20)),
+        task("2", date(2026, 9, 1), 100, actual=date(2026, 9, 1)),
+        task("3", date(2026, 9, 16)), task("4", date(2026, 9, 30)),
+        task("5", date(2026, 9, 30), active=False)])           # Hold: nicht in der Planlinie
+    ms = [metrics.compute_metrics(s1), metrics.compute_metrics(s2)]
+    pts = metrics.master_timeline(ms)
+    assert pts[0].start == date(2026, 8, 24) and pts[-1].start == date(2026, 9, 28)   # erste Snapshot-KW bis Planende
+    assert [p.planned_closed for p in pts] == [1, 2, 2, 3, 3, 4]                        # kumuliert lt. aktuellem Plan
+    assert [p.actual_closed for p in pts] == [1, 2, None, None, None, None]             # Ist nur in Snapshot-KWs
+    by = {p.start: p for p in pts}
+    assert by[date(2026, 8, 31)].actual_closed == 2 and by[date(2026, 8, 31)].is_evaluation_week
+    assert all(p.actual_closed is None for p in pts if p.start > date(2026, 8, 31))      # kein Ist nach Auswertungswoche
+    short = metrics.master_timeline(ms, date(2026, 9, 2), date(2026, 9, 17))
+    assert [p.label for p in short] == ["KW36", "KW37", "KW38"]
+    assert metrics.week_label(date(2027, 1, 1), True) == "KW53/2026"                   # ISO-Jahr am Jahreswechsel

@@ -13,7 +13,7 @@ import matplotlib
 matplotlib.use("Agg", force=False)
 from matplotlib.figure import Figure  # noqa: E402
 
-from .metrics import FinishPoint, OverdueTrendRow, SnapshotMetrics, TimelinePoint  # noqa: E402
+from .metrics import FinishPoint, OverdueTrendRow, SnapshotMetrics, WeekPoint, week_label  # noqa: E402
 from .model import TaskStatus  # noqa: E402
 
 COLORS = {
@@ -22,6 +22,7 @@ COLORS = {
     "closed": "#2ca02c",
     "overdue": "#d62728",
     "fulfilment": "#1f77b4",
+    "planned_line": "#1f77b4",
     TaskStatus.OPEN: "#1f77b4",
     TaskStatus.OPEN_OVERDUE: "#d62728",
     TaskStatus.CLOSED: "#2ca02c",
@@ -63,75 +64,71 @@ def _legend_below(fig: Figure, handles, labels, ncol: int | None = None, bottom:
                ncol=ncol, fontsize=9, frameon=False)
 
 
-def draw_timeline(fig: Figure, points: list[TimelinePoint], title: str = "Master Timeline") -> Figure:
-    """Projekt-Fortschritt: gruppierte Balken (überwacht/geplant/tatsächlich geschlossen)
-    plus Erfüllungsgrad-Linie – angelehnt an die klassische PJM-Fortschrittsgrafik."""
+def draw_master_timeline(fig: Figure, points: list[WeekPoint], title: str = "Master Timeline") -> Figure:
+    """Master Timeline je KW: blaue Linie = geplant geschlossen (kumuliert, aktueller Plan,
+    bis Planende), grüne Balken = tatsächlich geschlossen, graue Balken = überwacht – beide
+    nur in Wochen mit Snapshot (Ist-Werte entstehen nur zum Auswertungszeitpunkt)."""
+    import math
+
     fig.clear()
     ax = fig.add_subplot(111)
-    n = len(points)
-    labels = [p.label for p in points]
-    x = list(range(n))
-
-    # Bei vielen Stichtagen automatisch kleinere Schrift/steilere Drehung wählen,
-    # damit sich Balken-, Achsen- und Linienbeschriftungen nicht überlappen.
-    value_fs = max(5.5, min(8, 8 - max(0, n - 15) * 0.12))
-    tick_fs = max(7, min(9, 9 - max(0, n - 20) * 0.1))
-    tick_rot = 0 if n <= 8 else (45 if n <= 20 else 90)
-    # Bei vielen Wochen stehen die drei Balken je Termin sehr eng beieinander – dort
-    # die Balkenwerte senkrecht schreiben, damit sie nicht ineinanderlaufen.
-    bar_value_rot = 90 if n > 10 else 0
-
-    bar_w = 0.26
-    series = (
-        ("monitored", "Überwachte Aufgaben", COLORS["monitored"], -bar_w),
-        ("planned_closed", "Geplante Anzahl geschlossene Aufgaben", COLORS["planned"], 0.0),
-        ("actually_closed", "Tatsächliche Anzahl geschlossener Aufgaben", COLORS["closed"], bar_w),
-    )
-    for attr, label, color, off in series:
-        vals = [getattr(p, attr) for p in points]
-        ax.bar([xi + off for xi in x], vals, width=bar_w, color=color, label=label, zorder=3)
-        for xi, v in zip(x, vals):
-            if v:
-                ax.annotate(str(v), (xi + off, v), xytext=(0, 3), textcoords="offset points",
-                            ha="center", va="bottom", fontsize=value_fs, rotation=bar_value_rot,
-                            color=LABEL_INK, zorder=5)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=tick_rot, ha="right" if tick_rot else "center", fontsize=tick_fs)
-    ax.set_ylabel("Anzahl Aufgaben")
     ax.set_title(title, fontweight="bold", loc="left")
-    # Balken nehmen nur den unteren Teil der Fläche ein, damit oben durchgehend
-    # Platz für die Erfüllungsgrad-Linie und ihre Beschriftung bleibt (keine Überlappung).
-    y_top = max((p.monitored for p in points), default=0)
-    ax.set_ylim(0, y_top * 1.55 if y_top else 1)
+    if not points:
+        ax.axis("off")
+        ax.text(0.5, 0.5, "Keine Daten im gewählten Zeitraum", ha="center", va="center")
+        return fig
+    n = len(points)
+    x = list(range(n))
+    snap = [i for i, p in enumerate(points) if p.actual_closed is not None]
+    w = 0.4
+    ax.bar([i - w / 2 for i in snap], [points[i].monitored for i in snap], width=w,
+           color=COLORS["monitored"], label="Überwachte Aufgaben", zorder=3)
+    ax.bar([i + w / 2 for i in snap], [points[i].actual_closed for i in snap], width=w,
+           color=COLORS["closed"], label="Tatsächlich geschlossen (Ist)", zorder=3)
+    ax.plot(x, [p.planned_closed for p in points], color=COLORS["planned_line"], lw=2,
+            marker="o" if n <= 30 else None, markersize=3.5, zorder=4,
+            label="Geplant geschlossen (aktueller Plan, kumuliert)")
+
+    fs = 8 if n <= 30 else 6.5
+    rot = 0 if len(snap) <= 12 else 90
+    for i in snap:
+        v = points[i].actual_closed
+        ax.annotate(str(v), (i + w / 2, v), xytext=(0, 2), textcoords="offset points", ha="center",
+                    va="bottom", fontsize=fs, rotation=rot, color=COLORS["closed"], fontweight="bold", zorder=6)
+
+    ev = next((i for i, p in enumerate(points) if p.is_evaluation_week), None)
+    top = max([p.planned_closed for p in points] + [points[i].monitored or 0 for i in snap] + [1])
+    if ev is not None:
+        ax.axvline(ev, color="#555555", ls="--", lw=1, zorder=2)
+        ax.annotate(f"Auswertung {points[ev].label}", (ev, top * 1.12), xytext=(4, 0), textcoords="offset points",
+                    fontsize=8, color="#555555", va="top")
+    for i in {ev, n - 1} - {None}:
+        v = points[i].planned_closed
+        ax.annotate(str(v), (i, v), xytext=(0, 6), textcoords="offset points", ha="center", va="bottom",
+                    fontsize=fs, color=COLORS["planned_line"], fontweight="bold", zorder=6)
+
+    step = max(1, math.ceil(n / 26))
+    ticks = list(range(0, n, step))
+    labels, last_year = [], None
+    for i in ticks:
+        y = points[i].start.isocalendar()[0]
+        labels.append(points[i].label + (f"\n{y}" if y != last_year else ""))
+        last_year = y
+    ax.set_xticks(ticks, labels, fontsize=8)
+    ax.set_xlim(-0.7, n - 0.3)
+    ax.set_ylim(0, top * 1.18)
+    ax.set_ylabel("Anzahl Aufgaben")
     _style(ax)
+    h, l = ax.get_legend_handles_labels()
+    _legend_below(fig, h, l, ncol=3, bottom=0.2, legend_y=0.07)
 
-    ax2 = ax.twinx()
-    # Erfüllungsgrad nur dort, wo laut Plan bereits etwas geschlossen sein sollte
-    pct = [p.fulfilment_pct if p.planned_closed else float("nan") for p in points]
-    ax2.plot(x, pct, marker="D", markersize=5, linewidth=2, color=COLORS["fulfilment"],
-             label="Erfüllungsgrad [%]", zorder=4)
-    ax2.set_ylim(0, 112)
-    ax2.set_yticks([0, 20, 40, 60, 80, 100])
-    ax2.set_ylabel("Erfüllungsgrad [%]")
-    ax2.spines["top"].set_visible(False)
-    for xi, v in zip(x, pct):
-        if v == v:  # nicht NaN
-            ax2.annotate(f"{v:.0f}%", (xi, v), textcoords="offset points", xytext=(0, 6),
-                         ha="center", va="bottom", fontsize=value_fs,
-                         color=COLORS["fulfilment"], fontweight="bold", zorder=6)
-
-    h1, l1 = ax.get_legend_handles_labels()
-    h2, l2 = ax2.get_legend_handles_labels()
-    fig.tight_layout(rect=(0, 0.26, 1, 0.94))
-    fig.legend(h1 + h2, l1 + l2, loc="lower center", bbox_to_anchor=(0.5, 0.1),
-               ncol=4, fontsize=9, frameon=False)
-
-    last = points[-1] if points else None
-    if last is not None:
-        status = (f"Stand {labels[-1]}:  überwachte Aufgaben {last.monitored}  ·  "
-                  f"geplant geschlossen {last.planned_closed}  ·  tatsächlich geschlossen {last.actually_closed}  ·  "
-                  f"Erfüllungsgrad {last.fulfilment_pct:.0f} %  ·  überfällig {last.overdue}")
+    p = points[ev] if ev is not None else (points[snap[-1]] if snap else None)
+    if p is not None:
+        status = f"{week_label(p.start, True)}: geplant geschlossen (aktueller Plan) {p.planned_closed}"
+        if p.actual_closed is not None:
+            status += (f"  ·  tatsächlich geschlossen {p.actual_closed}  ·  überwacht {p.monitored}"
+                       f"  ·  Erfüllungsgrad (Basisplan) {p.fulfilment_pct:.0f} %")
+        status += f"  ·  Zeitraumende {week_label(points[-1].start, True)}: {points[-1].planned_closed} geplant geschlossen"
         fig.text(0.5, 0.015, status, ha="center", va="bottom", fontsize=8.5, color=LABEL_INK)
     return fig
 

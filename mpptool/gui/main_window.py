@@ -10,7 +10,7 @@ from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDateEdit, QDialog, QDialogButtonBox,
                                QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSplitter,
+                               QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QScrollArea, QSplitter,
                                QStatusBar, QTabWidget, QVBoxLayout, QWidget)
 
 from .. import config, demo_data, metrics, report
@@ -53,7 +53,17 @@ class ImportDialog(QDialog):
         return self.label_edit.text().strip()
 
 
+def _qdate(d: date) -> QDate:
+    return QDate(d.year, d.month, d.day)
+
+
+def _pydate(q: QDate) -> date:
+    return date(q.year(), q.month(), q.day())
+
+
 class ChartTab(QWidget):
+    PX_PER_WEEK = 16      # Master Timeline: ab dieser Dichte horizontal scrollen
+
     def __init__(self, builder, parent=None):
         super().__init__(parent)
         self.builder = builder
@@ -61,10 +71,16 @@ class ChartTab(QWidget):
         self.canvas = FigureCanvas(self.figure)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(self.canvas)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setWidget(self.canvas)
+        lay.addWidget(self.scroll)
 
     def render(self, review: report.Review | None) -> None:
         self.figure.clear()
+        # lange Zeitachsen (Master Timeline) horizontal scrollbar machen
+        weeks = len(review.week_points) if review is not None and self.builder is report.figure_timeline else 0
+        self.canvas.setMinimumWidth(weeks * self.PX_PER_WEEK if weeks > 60 else 0)
         if review is not None:
             self.builder(review, self.figure)
         else:
@@ -84,6 +100,7 @@ class MainWindow(QMainWindow):
         self.review: report.Review | None = None
         self._snap_cache: dict[int, Snapshot] = {}
         self._filling_groups = False
+        self._setting_dates = False
         self._build_ui()
         self._build_menu()
         self.refresh_snapshot_list()
@@ -128,6 +145,31 @@ class MainWindow(QMainWindow):
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("Projektname im Bericht")
         form.addRow("Projekt:", self.name_edit)
+        self.report_date_edit = QDateEdit(calendarPopup=True)
+        self.report_date_edit.setDisplayFormat("dd.MM.yyyy")
+        self.report_date_edit.setDate(_qdate(date.today()))
+        self.report_date_edit.setToolTip("Stichtag der Auswertung (Standard: heute) – bestimmt die Auswertungswoche")
+        form.addRow("Auswertungsdatum:", self.report_date_edit)
+        self.week_from_edit = QDateEdit(calendarPopup=True)
+        self.week_to_edit = QDateEdit(calendarPopup=True)
+        row_w = QHBoxLayout()
+        for ed in (self.week_from_edit, self.week_to_edit):
+            ed.setDisplayFormat("dd.MM.yyyy")
+            ed.setToolTip("Zeitraum der Master Timeline – es zählt die Kalenderwoche des Datums")
+        row_w.addWidget(self.week_from_edit)
+        row_w.addWidget(QLabel("bis"))
+        row_w.addWidget(self.week_to_edit)
+        form.addRow("Timeline von:", row_w)
+        self.week_range_label = QLabel()
+        self.week_range_label.setStyleSheet("color: #666666")
+        form.addRow("", self.week_range_label)
+        b_range = QPushButton("Zeitraum zurücksetzen (erste Snapshot-KW bis Planende)")
+        b_range.clicked.connect(self.reset_week_range)
+        form.addRow("", b_range)
+        # neues Auswertungsdatum verschiebt die Auswertungswoche -> Zeitraum neu bestimmen
+        self.report_date_edit.dateChanged.connect(self.reset_week_range)
+        for ed in (self.week_from_edit, self.week_to_edit):
+            ed.dateChanged.connect(self._on_dates_changed)
         ll.addLayout(form)
 
         self.group_label = QLabel()
@@ -164,14 +206,21 @@ class MainWindow(QMainWindow):
         ll.addLayout(row3)
         splitter.addWidget(left)
 
-        # rechte Seite: Vorschau-Tabs
+        # rechte Seite: Kopfzeile + Vorschau-Tabs
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        self.header_label = QLabel()
+        self.header_label.setStyleSheet("padding: 4px; color: #333333; background: #eeeeee")
+        rl.addWidget(self.header_label)
         self.tabs = QTabWidget()
         self.chart_tabs: list[ChartTab] = []
         for title, builder in report.SLIDE_BUILDERS:
             tab = ChartTab(builder)
             self.chart_tabs.append(tab)
             self.tabs.addTab(tab, title)
-        splitter.addWidget(self.tabs)
+        rl.addWidget(self.tabs, 1)
+        splitter.addWidget(right)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([380, 1000])
@@ -303,6 +352,7 @@ class MainWindow(QMainWindow):
         finally:
             self._filling_groups = False
         self._update_group_label()
+        self.reset_week_range()
 
     def _check_all_groups(self, state: bool) -> None:
         self._filling_groups = True
@@ -331,18 +381,52 @@ class MainWindow(QMainWindow):
         if self.review is not None and self.checked_ids():
             self.update_preview()
 
+    # ------------------------------------------------- Auswertungsdatum / KW
+    def reset_week_range(self, *_args) -> None:
+        """Zeitraum auf erste Snapshot-KW bis Planende des aktuellen Plans setzen."""
+        snaps = self._checked_snapshots()
+        if not snaps:
+            self._update_week_label()
+            return
+        rv = report.build_review(snaps, report_date=_pydate(self.report_date_edit.date()))
+        if rv.week_points:
+            self._setting_dates = True
+            try:
+                self.week_from_edit.setDate(_qdate(rv.week_points[0].start))
+                self.week_to_edit.setDate(_qdate(rv.week_points[-1].start))
+            finally:
+                self._setting_dates = False
+        self._on_dates_changed()
+
+    def _update_week_label(self) -> None:
+        wf, wt = _pydate(self.week_from_edit.date()), _pydate(self.week_to_edit.date())
+        weeks = (metrics.week_start(wt) - metrics.week_start(wf)).days // 7 + 1
+        self.week_range_label.setText(f"{metrics.week_label(wf, True)} – {metrics.week_label(wt, True)} "
+                                      f"({max(weeks, 0)} Wochen)")
+
+    def _on_dates_changed(self, *_args) -> None:
+        if self._setting_dates:
+            return
+        self._update_week_label()
+        if self.review is not None and self.checked_ids():
+            self.update_preview()
+
     # ------------------------------------------------------------- Vorschau
     def _build_review(self) -> report.Review | None:
         if not self.checked_ids():
             QMessageBox.information(self, "Vorschau", "Bitte mindestens einen Snapshot ankreuzen.")
             return None
         return report.build_review(self._checked_snapshots(), self.name_edit.text().strip() or None,
-                                   departments=self.selected_groups())
+                                   report_date=_pydate(self.report_date_edit.date()),
+                                   departments=self.selected_groups(),
+                                   week_from=_pydate(self.week_from_edit.date()),
+                                   week_to=_pydate(self.week_to_edit.date()))
 
     def update_preview(self) -> None:
         self.review = self._build_review()
         for t in self.chart_tabs:
             t.render(self.review)
+        self.header_label.setText(self.review.header if self.review else "")
         if self.review:
             m = self.review.current
             self.statusBar().showMessage(
@@ -360,7 +444,7 @@ class MainWindow(QMainWindow):
         self.update_preview()
         if self.review is None:
             return
-        default = config.OUTPUT_DIR / f"review_{self.review.cur_label}.{kind}"
+        default = config.OUTPUT_DIR / self.review.default_filename(kind)
         flt = "PowerPoint (*.pptx)" if kind == "pptx" else "PDF (*.pdf)"
         path, _ = QFileDialog.getSaveFileName(self, "Exportieren", str(default), flt)
         if not path:

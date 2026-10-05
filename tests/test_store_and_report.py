@@ -55,3 +55,15 @@ def test_review_group_selection(tmp_path):
     fig = report.figure_department_status(rv)
     assert [t.get_text() for t in fig.axes[0].get_xticklabels()] == sorted(groups)
     assert report.export_pptx(rv, tmp_path / "r.pptx").stat().st_size > 10_000
+
+
+def test_review_header_and_week_range():
+    from datetime import date
+    snaps = demo_data.generate_snapshots(weeks=3)
+    rv = report.build_review(snaps, "Test/Projekt", report_date=snaps[-1].snapshot_date,
+                             week_from=date(2022, 3, 1), week_to=date(2022, 3, 31))
+    assert rv.header.startswith("Projekt: Test/Projekt  ·  Timeline: Master_Demo_KW")
+    assert "Auswertungsdatum: " in rv.header and "(KW" in rv.header
+    assert rv.default_filename("pdf").startswith("Test_Projekt_Review_KW") and rv.default_filename("pdf").endswith(".pdf")
+    assert [p.label for p in rv.week_points][0] == "KW09" and len(rv.week_points) == 5
+    assert sum(p.is_evaluation_week for p in rv.week_points) == 1

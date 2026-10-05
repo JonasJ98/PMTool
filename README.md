@@ -26,8 +26,11 @@ python -m pytest                      # Tests
 
 Ablauf in der Oberfläche: **1. Input** (Datei importieren oder Demo-Daten) →
 **2. Vergleichsauswahl** (Snapshots ankreuzen; der jüngste ist „aktuell“, der
-davor „Vorwoche“) → **3. Vorschau** (Tabs: Übersicht, Master Timeline,
-Abteilungen, Überfällige, Trend-Tabelle, Aufgabenliste) → **4. Export** PPTX/PDF.
+davor „Vorwoche“; dazu Projektname, Auswertungsdatum, Zeitraum der Master Timeline
+KW von–bis und Ressourcengruppen) → **3. Vorschau** (Kopfzeile mit Projekt,
+Timeline-Datei und Auswertungsdatum; Tabs: Übersicht, Master Timeline,
+Projektende-Trend, Abteilungen, Überfällige, Trend-Tabelle, Aufgabenliste) →
+**4. Export** PPTX/PDF (Dateiname wird als `<Projekt>_Review_KWnn_<Datum>` vorgeschlagen).
 
 ## Weitere Befehle
 
@@ -110,6 +113,16 @@ Export, und zwar auf die Gruppen-Folien: Aufgaben je Fachabteilung, Überfällig
 Fachabteilung, Top-Overdues und Liste überfälliger Aufgaben (Titelzusatz
 „Auswahl: n von m Gruppen“). Übersicht und Master Timeline zeigen weiterhin das
 Gesamtprojekt.
+
+### Master Timeline
+
+Je Kalenderwoche im gewählten Zeitraum (Standard: erste Snapshot-KW bis Planende):
+**blaue Linie** = geplante Anzahl geschlossener Aufgaben, kumuliert nach dem
+*aktuellen Plan* (jüngster Snapshot, geplantes Ende, ohne Hold/Cancelled) bis zum
+Planende; **grüne Balken** = tatsächlich geschlossene Aufgaben und **graue Balken** =
+überwachte Aufgaben, jeweils nur in Wochen mit Snapshot (Ist-Werte entstehen nur zum
+Auswertungszeitpunkt). Die Auswertungswoche ist gestrichelt markiert. Lange Zeiträume
+lassen sich in der Vorschau horizontal scrollen; CLI: `report --von 2026-01-05 --bis 2026-12-28`.
 
 ### Projektende-Trend
 

@@ -16,10 +16,11 @@ Gezählt werden nur Vorgänge mit Dauer > 0 (Aufgaben) sowie Meilensteine
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import Counter, defaultdict
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 from . import config
 from .model import Snapshot, TaskRecord, TaskStatus
@@ -358,6 +359,84 @@ def finish_trend(metrics_list: list[SnapshotMetrics]) -> list[FinishPoint]:
             expected_finish=max((t.finish for t in tasks if t.finish), default=None),
             baseline_finish=max((t.baseline_finish for t in tasks if t.baseline_finish), default=None),
         ))
+    return pts
+
+
+# --------------------------------------------------------------------------
+# Master Timeline je Kalenderwoche (Besprechung: blaue Planlinie bis Planende,
+# grüne Ist-Balken nur bis zur Auswertungswoche)
+# --------------------------------------------------------------------------
+MAX_TIMELINE_WEEKS = 520   # Schutz gegen offensichtlich falsche Enddaten (z. B. 2099)
+
+
+def week_start(d: date) -> date:
+    """Montag der ISO-Kalenderwoche."""
+    return d - timedelta(days=d.weekday())
+
+
+def week_label(d: date, with_year: bool = False) -> str:
+    y, w, _ = d.isocalendar()
+    return f"KW{w:02d}/{y}" if with_year else f"KW{w:02d}"
+
+
+@dataclass
+class WeekPoint:
+    start: date                          # Montag der KW
+    planned_closed: int                  # kumuliert geplant geschlossen laut aktuellem Plan
+    actual_closed: int | None = None     # Ist (nur in Wochen mit Snapshot)
+    monitored: int | None = None
+    fulfilment_pct: float | None = None
+    is_evaluation_week: bool = False
+
+    @property
+    def end(self) -> date:
+        return self.start + timedelta(days=6)
+
+    @property
+    def label(self) -> str:
+        return week_label(self.start)
+
+
+def default_week_range(metrics_list: list[SnapshotMetrics]) -> tuple[date, date]:
+    """Standard-Zeitraum: erste Snapshot-KW bis Planende (spätestes geplantes Ende im
+    aktuellen Plan, mindestens die Auswertungswoche). ``metrics_list[-1]`` = aktuell."""
+    cur = metrics_list[-1]
+    finishes = [t.finish for t in relevant_tasks(cur.snapshot.tasks) if t.finish]
+    start = week_start(min(m.as_of for m in metrics_list))
+    end = week_start(max([cur.as_of, *finishes]))
+    return start, end
+
+
+def master_timeline(metrics_list: list[SnapshotMetrics], week_from: date | None = None,
+                    week_to: date | None = None) -> list[WeekPoint]:
+    """Wochenreihe für die Master Timeline.
+
+    Planlinie: Anzahl gezählter Aufgaben des aktuellen Plans (jüngster Snapshot), deren
+    geplantes Ende bis Ende der KW liegt (ohne Hold/Cancelled) – also die Prognose bis
+    zum Planende. Ist-Werte: tatsächlich geschlossene Aufgaben aus dem Snapshot der
+    jeweiligen KW (je KW der letzte), damit nur zum Auswertungszeitpunkt berechnete
+    Werte erscheinen. ``metrics_list`` chronologisch, letzter Eintrag = aktuell."""
+    if not metrics_list:
+        return []
+    cur = metrics_list[-1]
+    d_from, d_to = default_week_range(metrics_list)
+    w_from, w_to = week_start(week_from or d_from), week_start(week_to or d_to)
+    if w_to < w_from:
+        w_from, w_to = w_to, w_from
+    w_to = min(w_to, w_from + timedelta(weeks=MAX_TIMELINE_WEEKS - 1))
+    finishes = sorted(t.finish for t in relevant_tasks(cur.snapshot.tasks)
+                      if t.finish and cur.statuses.get(t.uid) not in (TaskStatus.HOLD, TaskStatus.CANCELLED))
+    by_week = {week_start(m.as_of): m for m in metrics_list}   # spätere überschreiben frühere
+    eval_week = week_start(cur.as_of)
+    pts: list[WeekPoint] = []
+    w = w_from
+    while w <= w_to:
+        m = by_week.get(w)
+        pts.append(WeekPoint(
+            start=w, planned_closed=bisect_right(finishes, w + timedelta(days=6)),
+            actual_closed=m.actually_closed if m else None, monitored=m.monitored if m else None,
+            fulfilment_pct=m.fulfilment_pct if m else None, is_evaluation_week=(w == eval_week)))
+        w += timedelta(weeks=1)
     return pts
 
 

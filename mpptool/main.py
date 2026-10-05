@@ -80,8 +80,10 @@ def cmd_report(args) -> int:
             return 1
         snaps = store.load_snapshots(ids)
     report_date = date.fromisoformat(args.report_date) if args.report_date else None
-    rv = report.build_review(snaps, args.name, report_date=report_date)
-    out = Path(args.out) if args.out else config.OUTPUT_DIR / f"review_{rv.cur_label}.pptx"
+    week_from = date.fromisoformat(args.von) if args.von else None
+    week_to = date.fromisoformat(args.bis) if args.bis else None
+    rv = report.build_review(snaps, args.name, report_date=report_date, week_from=week_from, week_to=week_to)
+    out = Path(args.out) if args.out else config.OUTPUT_DIR / rv.default_filename("pptx")
     if out.suffix.lower() == ".pdf":
         report.export_pdf(rv, out)
     else:
@@ -131,6 +133,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--out", help="Zieldatei .pptx oder .pdf")
     s.add_argument("--name", help="Projektname für den Bericht")
     s.add_argument("--report-date", help="Auswertungstag/Stichtag YYYY-MM-DD (Standard: heute)")
+    s.add_argument("--von", help="Master Timeline ab (Datum in der Start-KW, YYYY-MM-DD; Standard: erste Snapshot-KW)")
+    s.add_argument("--bis", help="Master Timeline bis (Datum in der End-KW, YYYY-MM-DD; Standard: Planende)")
     s.set_defaults(func=cmd_report)
 
     s = sub.add_parser("gui", help="Desktop-Oberfläche starten")

@@ -18,8 +18,9 @@ from pptx.dml.color import RGBColor
 from pptx.util import Emu, Inches, Pt
 
 from . import charts, config
-from .metrics import (FinishPoint, OverdueTrendRow, SnapshotMetrics, TimelinePoint, all_departments,
-                      compute_metrics, finish_trend, overdue_tasks, overdue_trend, task_changes, timeline)
+from .metrics import (FinishPoint, OverdueTrendRow, SnapshotMetrics, TimelinePoint, WeekPoint, all_departments,
+                      compute_metrics, finish_trend, master_timeline, overdue_tasks, overdue_trend, task_changes,
+                      timeline, week_label)
 from .model import Snapshot, TaskRecord
 
 SLIDE_W, SLIDE_H = Inches(13.333), Inches(7.5)   # 16:9
@@ -39,6 +40,7 @@ class Review:
     departments: frozenset[str] | None = None
     all_departments: list[str] = field(default_factory=list)
     finish_points: list[FinishPoint] = field(default_factory=list)
+    week_points: list[WeekPoint] = field(default_factory=list)   # Master Timeline je KW
 
     @property
     def current(self) -> SnapshotMetrics:
@@ -47,6 +49,23 @@ class Review:
     @property
     def previous(self) -> SnapshotMetrics | None:
         return self.metrics[-2] if len(self.metrics) > 1 else None
+
+    @property
+    def timeline_file(self) -> str:
+        return self.current.snapshot.source_file
+
+    @property
+    def header(self) -> str:
+        """Kopfzeile (Besprechung): Projekt, Timeline-Datei, Auswertungsdatum + KW."""
+        d = self.current.as_of
+        return (f"Projekt: {self.project_name}  ·  Timeline: {self.timeline_file}  ·  "
+                f"Auswertungsdatum: {d.strftime('%d.%m.%Y')} ({week_label(d, True)})")
+
+    def default_filename(self, ext: str) -> str:
+        import re
+        kw = week_label(self.current.as_of)
+        name = re.sub(r'[\\/:*?"<>|]+', "_", self.project_name).strip() or "Projekt"
+        return f"{name}_Review_{kw}_{self.current.as_of.isoformat()}.{ext}"
 
     @property
     def group_suffix(self) -> str:
@@ -68,7 +87,8 @@ class Review:
 
 
 def build_review(snapshots: list[Snapshot], project_name: str | None = None,
-                 report_date: date | None = None, departments: Iterable[str] | None = None) -> Review:
+                 report_date: date | None = None, departments: Iterable[str] | None = None,
+                 week_from: date | None = None, week_to: date | None = None) -> Review:
     """Baut den Bericht. Der aktuelle Vergleichspunkt wird immer zum Auswertungstag
     (``report_date``, Standard: heute) bewertet – unabhängig von der Kalenderwoche
     des zuletzt importierten Snapshots. Der Vergleich erfolgt stets gegen den
@@ -76,7 +96,10 @@ def build_review(snapshots: list[Snapshot], project_name: str | None = None,
 
     ``departments`` beschränkt die Gruppen-Folien (Aufgaben/Überfällige je
     Fachabteilung, Top-Overdues, Liste überfälliger Aufgaben) auf die gewählten
-    Ressourcengruppen; Übersicht und Master Timeline zeigen das Gesamtprojekt."""
+    Ressourcengruppen; Übersicht und Master Timeline zeigen das Gesamtprojekt.
+
+    ``week_from``/``week_to`` begrenzen die Master Timeline (KW von–bis); Standard:
+    erste Snapshot-KW bis Planende."""
     if not snapshots:
         raise ValueError("Mindestens ein Snapshot erforderlich")
     report_date = report_date or date.today()
@@ -90,7 +113,7 @@ def build_review(snapshots: list[Snapshot], project_name: str | None = None,
         project_name=name, metrics=ms, timeline=timeline(ms), report_date=report_date,
         trend_rows=overdue_trend(ms, departments=deps), overdue_list=overdue_tasks(ms[-1], deps),
         changes=task_changes(prev, ms[-1]), departments=deps, all_departments=all_departments(snaps),
-        finish_points=finish_trend(ms),
+        finish_points=finish_trend(ms), week_points=master_timeline(ms, week_from, week_to),
     )
 
 
@@ -99,7 +122,7 @@ def build_review(snapshots: list[Snapshot], project_name: str | None = None,
 # --------------------------------------------------------------------------
 def figure_timeline(review: Review, fig: Figure | None = None) -> Figure:
     fig = fig or Figure(figsize=FIG_SIZE)
-    return charts.draw_timeline(fig, review.timeline, f"Master Timeline – {review.project_name}")
+    return charts.draw_master_timeline(fig, review.week_points, f"Master Timeline – {review.project_name}")
 
 
 def figure_finish_trend(review: Review, fig: Figure | None = None) -> Figure:
@@ -223,8 +246,7 @@ def export_pdf(review: Review, path: str | Path) -> Path:
 
 
 def _footer_fig(fig: Figure, review: Review) -> None:
-    fig.text(0.01, 0.01, f"{config.REPORT_AUTHOR} · {config.REPORT_TITLE} · Stand {review.current.as_of.isoformat()}",
-             fontsize=7, color="#888888")
+    fig.text(0.99, 0.995, review.header, fontsize=7, color="#888888", va="top", ha="right")
 
 
 # --------------------------------------------------------------------------
@@ -241,8 +263,10 @@ def export_pptx(review: Review, path: str | Path) -> Path:
     s = prs.slides.add_slide(blank)
     _textbox(s, config.REPORT_TITLE, Inches(0.6), Inches(2.4), Inches(12), Inches(1.0), 40, bold=True)
     _textbox(s, review.project_name, Inches(0.6), Inches(3.4), Inches(12), Inches(0.8), 24)
-    _textbox(s, f"Stand {review.cur_label} · {review.current.as_of.isoformat()} · Vergleich zu {review.prev_label}",
-             Inches(0.6), Inches(4.3), Inches(12), Inches(0.6), 16, color="666666")
+    _textbox(s, f"Timeline: {review.timeline_file}\n"
+                f"Auswertungsdatum: {review.current.as_of.strftime('%d.%m.%Y')} ({week_label(review.current.as_of, True)})"
+                f" · Vergleich zu {review.prev_label}",
+             Inches(0.6), Inches(4.3), Inches(12), Inches(1.0), 16, color="666666")
 
     # KPI-Folie als native Tabelle
     s = prs.slides.add_slide(blank)
@@ -296,7 +320,7 @@ def export_pptx(review: Review, path: str | Path) -> Path:
         _textbox(s, "\n".join(lines), Inches(0.6), Inches(1.3), Inches(12), Inches(5.8), 12)
 
     for slide in prs.slides:
-        _textbox(slide, f"{config.REPORT_AUTHOR} · {config.REPORT_TITLE} · Stand {review.current.as_of.isoformat()}",
+        _textbox(slide, f"{config.REPORT_AUTHOR} · {config.REPORT_TITLE} · {review.header}",
                  Inches(0.4), SLIDE_H - Inches(0.45), Inches(10), Inches(0.35), 9, color="888888")
     prs.save(str(path))
     return path
