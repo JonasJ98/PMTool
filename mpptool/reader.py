@@ -151,22 +151,29 @@ def _to_bool(value: Any, default: bool) -> bool:
         return default
 
 
-def _department_of(task: Any) -> str:
-    text = _to_str(task.getText(config.DEPARTMENT_TEXT_FIELD_INDEX)).strip()
-    if text:
-        return text
-    if config.DEPARTMENT_FALLBACK_TO_RESOURCE_GROUP:
-        grp = _to_str(getattr(task, "getResourceGroup", lambda: None)()).strip()
-        if grp:
-            return grp.split(",")[0].strip()
-        try:
-            for a in task.getResourceAssignments():
-                r = a.getResource()
-                if r is not None and r.getGroup():
-                    return _to_str(r.getGroup()).strip()
-        except Exception:
-            pass
+def _resource_group_of(task: Any) -> str:
+    """Ressourcengruppe der Aufgabe (erste Gruppe, falls mehrere)."""
+    grp = _to_str(getattr(task, "getResourceGroup", lambda: None)()).strip()
+    if grp:
+        return grp.split(",")[0].strip()
+    try:
+        for a in task.getResourceAssignments():
+            r = a.getResource()
+            if r is not None and r.getGroup():
+                return _to_str(r.getGroup()).strip()
+    except Exception:
+        pass
     return ""
+
+
+def _department_of(task: Any) -> str:
+    if config.DEPARTMENT_SOURCE == "text_field":
+        text = _to_str(task.getText(config.DEPARTMENT_TEXT_FIELD_INDEX)).strip()
+        if text:
+            return text
+        if not config.DEPARTMENT_FALLBACK_TO_RESOURCE_GROUP:
+            return ""
+    return _resource_group_of(task)
 
 
 def _duration_days_of(task: Any) -> float | None:
@@ -223,6 +230,7 @@ def task_to_record(task: Any, source_file: str, uid_prefix: str = "") -> TaskRec
         hold_flag=_hold_flag_of(task),
         cancel_flag=_cancel_flag_of(task),
         duration=_duration_days_of(task),
+        wbs=_to_str(getattr(task, "getWBS", lambda: None)()).strip(),
     )
 
 
@@ -320,6 +328,8 @@ def read_snapshot(path: str | os.PathLike, snapshot_date: date | None = None,
     project = read_project_file(p)
     warnings: list[str] = []
     records = extract_records(project, p.name, master_dir=p.parent, warnings=warnings)
+    from .metrics import data_quality_warnings
+    warnings.extend(data_quality_warnings(records))
 
     source = "vorgegeben"
     if snapshot_date is None:

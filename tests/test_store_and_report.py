@@ -31,12 +31,14 @@ def test_store_keeps_native_duration(tmp_path):
     snap = demo_data.generate_snapshots(weeks=1)[0]
     snap.tasks[0].duration = 0.0
     snap.tasks[1].duration = 2.5
+    snap.tasks[1].wbs = "1.2.3"
     with SnapshotStore(tmp_path / "t.sqlite") as store:
         loaded = store.load_snapshot(store.add_snapshot(snap))
     by_uid = {t.uid: t.duration for t in loaded.tasks}
     assert by_uid[snap.tasks[0].uid] == 0.0
     assert by_uid[snap.tasks[1].uid] == 2.5
     assert by_uid[snap.tasks[2].uid] is None
+    assert {t.uid: t.wbs for t in loaded.tasks}[snap.tasks[1].uid] == "1.2.3"
 
 
 def test_review_group_selection(tmp_path):

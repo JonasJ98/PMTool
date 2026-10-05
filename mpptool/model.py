@@ -48,6 +48,7 @@ class TaskRecord:
     hold_flag: bool = False       # aus Textfeld, falls konfiguriert
     cancel_flag: bool = False     # aus Textfeld, falls konfiguriert
     duration: float | None = None  # MS-Project-Dauer in Tagen (None = ältere Snapshots)
+    wbs: str = ""                 # PSP-Code (MS Project "PSP-Code"/WBS)
 
     @property
     def is_complete(self) -> bool:

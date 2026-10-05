@@ -90,6 +90,18 @@ importiert wurden, haben das Feld nicht; dort wird auf Ende − Start (Kalendert
 zurückgefallen – 1-Tages-Aufgaben fallen dann heraus. Für korrekte Zahlen solche
 Snapshots einmal neu importieren.
 
+### Gruppierung und Datenqualität
+
+Gruppiert wird ausschließlich nach der **MS-Project-Ressourcengruppe**
+(`config.DEPARTMENT_SOURCE = "resource_group"`) – nie nach Personen. Aufgaben ohne
+Ressourcengruppe werden nicht ausgewertet; ihre Anzahl steht in der Übersicht
+(`EXCLUDE_TASKS_WITHOUT_GROUP`). Der **PSP-Code** wird je Aufgabe eingelesen und in der
+Liste überfälliger Aufgaben angezeigt.
+
+Beim Import erscheinen Hinweise zur Datenqualität: Aufgaben ohne Ressourcengruppe,
+doppelte PSP-Codes (`WBS_DUPLICATE_SCOPE`: über alle Dateien oder je Datei),
+Meilensteine mit Dauer > 0 und auffällig lange Dauern (`WARN_LONG_DURATION_DAYS`).
+
 ### Ressourcengruppen-Auswahl
 
 In der GUI listet „Ressourcengruppen“ (unten links) alle Gruppen der angekreuzten
@@ -151,7 +163,7 @@ Führendes Backlog: [`docs/Backlog_MPP_Auswertungstool.docx`](docs/Backlog_MPP_A
 eine Kopie für den Auftraggeber liegt auf dem K:-Laufwerk.
 
 
-1. `DEPARTMENT_TEXT_FIELD_INDEX` an einer echten .mpp mit `inspect_fields` bestimmen.
+1. An einer echten .mpp prüfen, ob alle Aufgaben eine Ressourcengruppe haben und die PSP-Codes eindeutig sind (Import-Hinweise).
 2. Import gegen echte Master-Datei mit Teilprojekten prüfen (Konsole/Dialog auf Warnungen achten).
 3. Packaging-Test mit `build.ps1` auf einem Rechner mit Endpoint-Security der Fachabteilungen.
 4. Abteilungsübergreifende Kapazitätsplanung.

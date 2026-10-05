@@ -8,8 +8,9 @@ from mpptool import config, reader
 
 
 class FakeTask:
-    def __init__(self, uid, name, text1="", finish=None, subproject=None, summary=False, pct=0):
+    def __init__(self, uid, name, text1="", finish=None, subproject=None, summary=False, pct=0, group=None):
         self._uid, self._name, self._text1, self._finish = uid, name, text1, finish
+        self._group = group
         self._sub, self._summary, self._pct = subproject, summary, pct
 
     def getUniqueID(self): return self._uid
@@ -26,7 +27,7 @@ class FakeTask:
     def getExternalTask(self): return False
     def getOutlineLevel(self): return 1
     def getSubprojectFile(self): return self._sub
-    def getResourceGroup(self): return None
+    def getResourceGroup(self): return self._group
     def getResourceAssignments(self): return []
 
 
@@ -47,6 +48,7 @@ def test_resolve_subproject_path(tmp_path):
 
 def test_extract_records_expands_subprojects(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DEPARTMENT_TEXT_FIELD_INDEX", 1)
+    monkeypatch.setattr(config, "DEPARTMENT_SOURCE", "text_field")
     sub_file = tmp_path / "Sub_SW.mpp"
     sub_file.write_bytes(b"x")
     master = FakeProject([
@@ -111,3 +113,11 @@ def test_suggest_snapshot_date(tmp_path):
     g.write_bytes(b"x")
     assert reader.suggest_snapshot_date(g, Proj()) == (date(2022, 3, 18), "Statusdatum der Datei")
     assert reader.suggest_snapshot_date(g)[1] == "Änderungsdatum der Datei"
+
+
+def test_department_from_resource_group_only(monkeypatch):
+    monkeypatch.setattr(config, "DEPARTMENT_SOURCE", "resource_group")
+    proj = FakeProject([FakeTask(1, "A", text1="Max Mustermann", finish=date(2026, 9, 1), group="AE-ENG, PUR"),
+                        FakeTask(2, "B", text1="SW", finish=date(2026, 9, 1))])
+    recs = reader.extract_records(proj, "x.mpp")
+    assert [r.department for r in recs] == ["AE-ENG", ""]   # Textfeld (z. B. Personenname) wird ignoriert

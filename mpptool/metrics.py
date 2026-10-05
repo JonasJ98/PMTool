@@ -35,18 +35,70 @@ def canonical_department(name: str | None) -> str:
     return config.DEPARTMENT_ALIASES.get(name, name)
 
 
+def _passes_base_filter(t: TaskRecord) -> bool:
+    """Sammelvorgänge, externe Platzhalter, 0-Tage-Vorgänge ohne Meilenstein-Flag raus."""
+    if config.EXCLUDE_SUMMARY_TASKS and t.is_summary:
+        return False
+    if config.EXCLUDE_MILESTONES and t.is_milestone:
+        return False
+    if config.EXCLUDE_EXTERNAL_PLACEHOLDERS and t.is_external:
+        return False
+    if config.EXCLUDE_ZERO_DURATION_NON_MILESTONES and not t.is_countable:
+        return False
+    return True
+
+
+def _has_group(t: TaskRecord) -> bool:
+    return bool((t.department or "").strip())
+
+
 def relevant_tasks(tasks: list[TaskRecord]) -> list[TaskRecord]:
-    out = []
+    """Gezählte Vorgänge; zusätzlich ohne Ressourcengruppe raus (falls konfiguriert)."""
+    return [t for t in tasks if _passes_base_filter(t)
+            and (_has_group(t) or not config.EXCLUDE_TASKS_WITHOUT_GROUP)]
+
+
+def tasks_without_group(tasks: list[TaskRecord]) -> list[TaskRecord]:
+    """Vorgänge, die nur wegen fehlender Ressourcengruppe nicht ausgewertet werden."""
+    if not config.EXCLUDE_TASKS_WITHOUT_GROUP:
+        return []
+    return [t for t in tasks if _passes_base_filter(t) and not _has_group(t)]
+
+
+def _task_label(t: TaskRecord) -> str:
+    return f"{t.wbs} – {t.name}" if t.wbs else t.name
+
+
+def data_quality_warnings(tasks: list[TaskRecord]) -> list[str]:
+    """Hinweise zur Datenqualität beim Import (Besprechung: Daten vor der Auswertung
+    bereinigen): fehlende Ressourcengruppe, doppelte PSP-Codes, Meilensteine mit
+    Dauer > 0, auffällig lange Dauern."""
+    limit = config.WARN_LIST_LIMIT
+    out: list[str] = []
+
+    def block(title: str, lines: list[str]) -> None:
+        if not lines:
+            return
+        more = f"\n   … und {len(lines) - limit} weitere" if len(lines) > limit else ""
+        out.append(f"{title}: {len(lines)}\n" + "\n".join(f"   • {ln}" for ln in lines[:limit]) + more)
+
+    block("Ohne Ressourcengruppe (nicht ausgewertet)", [_task_label(t) for t in tasks_without_group(tasks)])
+
+    by_wbs: dict[tuple[str, str], list[TaskRecord]] = defaultdict(list)
     for t in tasks:
-        if config.EXCLUDE_SUMMARY_TASKS and t.is_summary:
-            continue
-        if config.EXCLUDE_MILESTONES and t.is_milestone:
-            continue
-        if config.EXCLUDE_EXTERNAL_PLACEHOLDERS and t.is_external:
-            continue
-        if config.EXCLUDE_ZERO_DURATION_NON_MILESTONES and not t.is_countable:
-            continue
-        out.append(t)
+        if t.wbs and not t.is_external:
+            key = (t.source_file if config.WBS_DUPLICATE_SCOPE == "file" else "", t.wbs)
+            by_wbs[key].append(t)
+    dups = sorted((k[1], v) for k, v in by_wbs.items() if len(v) > 1)
+    block("Doppelte PSP-Codes", [f"{w} ({len(v)}×): " + "; ".join(f"{t.name} [{t.source_file}]" for t in v[:3])
+                                 for w, v in dups])
+
+    counted = [t for t in tasks if _passes_base_filter(t)]
+    block("Meilensteine mit Dauer > 0 (Quelldaten prüfen)",
+          [f"{_task_label(t)} ({t.duration_days:g} d)" for t in counted if t.is_milestone and t.has_duration])
+    block(f"Dauer > {config.WARN_LONG_DURATION_DAYS} Tage (Quelldaten prüfen)",
+          [f"{_task_label(t)} ({t.duration_days:g} d)" for t in counted
+           if t.duration_days > config.WARN_LONG_DURATION_DAYS])
     return out
 
 
@@ -122,6 +174,7 @@ class SnapshotMetrics:
     cancelled: int = 0        # Status Cancelled
     tasks_count: int = 0      # Aufgaben (Dauer > 0 Tage)
     milestones_count: int = 0  # Meilensteine (Dauer = 0 Tage)
+    no_group_count: int = 0    # wegen fehlender Ressourcengruppe nicht ausgewertet
 
     @property
     def fulfilment_pct(self) -> float:
@@ -192,6 +245,7 @@ def compute_metrics(snapshot: Snapshot, as_of: date | None = None) -> SnapshotMe
         actually_closed=actually_closed, open_overdue=open_overdue,
         closed_overdue=closed_overdue, hold=hold, cancelled=cancelled,
         tasks_count=tasks_count, milestones_count=milestones_count,
+        no_group_count=len(tasks_without_group(snapshot.tasks)),
     )
 
 

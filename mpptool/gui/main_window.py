@@ -350,6 +350,7 @@ class MainWindow(QMainWindow):
                 f"({m.tasks_count} Aufgaben / {m.milestones_count} Meilensteine) · "
                 f"{m.actually_closed}/{m.planned_closed} geschlossen ({m.fulfilment_pct:.1f} %) · "
                 f"{m.open_overdue} überfällig · {m.hold} Hold · {m.cancelled} Cancelled · "
+                f"{m.no_group_count} ohne Ressourcengruppe (nicht gezählt) · "
                 f"Vergleich zu {self.review.prev_label}")
 
     # --------------------------------------------------------------- Export

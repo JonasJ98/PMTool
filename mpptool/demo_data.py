@@ -35,14 +35,12 @@ def _base_plan(seed: int = 42, n_tasks: int = 90) -> list[dict]:
         start = PROJECT_START + timedelta(days=rnd.randint(0, 40))
         dur = rnd.randint(3, 21)
         finish = start + timedelta(days=dur)
+        # Neigung zur Verzögerung je Aufgabe (Tage), Wahrscheinlichkeit rechtzeitig fertig zu werden
+        slip, diligence, milestone = max(0, int(rnd.gauss(2, 6))), rnd.random(), rnd.random() < 0.05
         plan.append({
-            "uid": i, "name": f"{dep} Aufgabe {i:03d}", "department": dep,
-            "start": start, "baseline_finish": finish,
-            # Neigung zur Verzögerung je Aufgabe (Tage)
-            "slip": max(0, int(rnd.gauss(2, 6))),
-            # Wahrscheinlichkeit, rechtzeitig fertig zu werden
-            "diligence": rnd.random(),
-            "milestone": rnd.random() < 0.05,
+            "uid": i, "name": f"{dep} {'Meilenstein' if milestone else 'Aufgabe'} {i:03d}", "department": dep,
+            "start": finish if milestone else start, "baseline_finish": finish,   # Meilenstein: Dauer 0
+            "slip": slip, "diligence": diligence, "milestone": milestone,
         })
     return plan
 
@@ -85,19 +83,22 @@ def generate_snapshots(weeks: int = 6, seed: int = 42) -> list[Snapshot]:
             pct = 100.0 if done else min(95.0, max(0.0, 100.0 * (as_of - p["start"]).days / max(1, (current_finish - p["start"]).days)))
             if p["start"] > as_of:
                 pct = 0.0
+            # Meilensteine behalten Dauer 0, auch wenn sie sich verschieben
+            start = actual_finish.get(uid, current_finish) if p["milestone"] else p["start"]
             tasks.append(TaskRecord(
                 uid=str(uid), name=p["name"], department=p["department"],
-                start=p["start"], finish=actual_finish.get(uid, current_finish),
+                start=start, finish=actual_finish.get(uid, current_finish),
                 baseline_finish=p["baseline_finish"], actual_finish=actual_finish.get(uid),
                 percent_complete=pct, is_milestone=p["milestone"],
                 is_active=uid not in hold_uids,
                 source_file="Sub_SW_TEST.xml" if p["department"] in SUBPROJECT_DEPARTMENTS else "Master_Demo.xml",
+                wbs=f"DEMO.{uid}",
             ))
         # Sammelvorgang je Abteilung (wird in Kennzahlen herausgefiltert)
         for dep in DEPARTMENTS:
             tasks.append(TaskRecord(uid=f"S-{dep}", name=f"Sammelvorgang {dep}", department=dep,
                                     start=PROJECT_START, finish=as_of, baseline_finish=None,
-                                    actual_finish=None, percent_complete=0, is_summary=True))
+                                    actual_finish=None, percent_complete=0, is_summary=True, wbs=f"DEMO.{dep}"))
         kw = as_of.isocalendar()[1]
         snaps.append(Snapshot(snapshot_date=as_of, source_file=f"Master_Demo_KW{kw:02d}.xml",
                               tasks=tasks, label="Demo"))
@@ -123,10 +124,22 @@ def write_demo_files(out_dir: str | Path, weeks: int = 6, seed: int = 42) -> lis
     def ldt(d: date | None, hour: int):
         return None if d is None else LocalDateTime.of(d.year, d.month, d.day, hour, 0)
 
+    resources: dict = {}   # (Projekt, Gruppe) -> Ressource; Gruppe = Abteilung
+
     def add(pf, t: TaskRecord):
         jt = pf.addTask()
         jt.setName(t.name)
         jt.setText(config.DEPARTMENT_TEXT_FIELD_INDEX, t.department)
+        if t.wbs:
+            jt.setWBS(t.wbs)
+        if t.department:
+            res = resources.get((id(pf), t.department))
+            if res is None:
+                res = pf.addResource()
+                res.setName(f"Team {t.department}")
+                res.setGroup(t.department)
+                resources[(id(pf), t.department)] = res
+            jt.addResourceAssignment(res)
         jt.setStart(ldt(t.start, 8))
         jt.setFinish(ldt(t.finish, 17))
         jt.setDuration(Duration.getInstance(jpype.JDouble(float(t.duration_days)), TimeUnit.DAYS))

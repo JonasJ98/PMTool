@@ -101,3 +101,52 @@ def test_finish_trend():
     pts = metrics.finish_trend([metrics.compute_metrics(s2), metrics.compute_metrics(s1)])
     assert [p.expected_finish for p in pts] == [date(2026, 10, 1), date(2026, 10, 15)]
     assert pts[-1].slip_vs_baseline == 14
+
+
+def test_tasks_without_group_excluded_and_counted():
+    snap = Snapshot(snapshot_date=AS_OF, source_file="x.mpp", tasks=[
+        task("1", date(2026, 9, 10), dep="SW"), task("2", date(2026, 9, 1), dep=""),
+        task("3", date(2026, 9, 1), dep="", summary=True)])        # Sammelvorgang zählt so oder so nicht
+    m = metrics.compute_metrics(snap)
+    assert set(m.statuses) == {"1"}
+    assert m.no_group_count == 1
+    assert metrics.all_departments([snap]) == ["SW"]
+
+
+def test_tasks_without_group_kept_when_configured(monkeypatch):
+    from mpptool import config
+    monkeypatch.setattr(config, "EXCLUDE_TASKS_WITHOUT_GROUP", False)
+    snap = Snapshot(snapshot_date=AS_OF, source_file="x.mpp", tasks=[task("2", date(2026, 9, 1), dep="")])
+    m = metrics.compute_metrics(snap)
+    assert m.monitored == 1 and m.no_group_count == 0
+    assert m.departments == [config.DEPARTMENT_UNKNOWN]
+
+
+def test_data_quality_warnings():
+    def rec(uid, wbs, src="a.mpp", **kw):
+        return TaskRecord(uid=uid, name=f"T{uid}", department=kw.pop("dep", "AA"), start=date(2026, 1, 1),
+                          finish=date(2026, 1, 1), baseline_finish=None, actual_finish=None, percent_complete=0,
+                          source_file=src, wbs=wbs, **kw)
+    w = metrics.data_quality_warnings([
+        rec("1", "1.1", duration=5.0),
+        rec("2", "1.1", src="b.mpp", duration=3.0),               # doppelter PSP-Code (andere Datei)
+        rec("3", "1.2", duration=4.0, is_milestone=True),         # Meilenstein mit Dauer > 0
+        rec("4", "1.3", duration=500.0),                          # sehr lange Dauer
+        rec("5", "1.4", duration=2.0, dep=""),                    # ohne Ressourcengruppe
+        rec("6", "1", duration=10.0, is_summary=True),            # Sammelvorgang: nur PSP-Prüfung
+    ])
+    text = "\n".join(w)
+    assert "Ohne Ressourcengruppe (nicht ausgewertet): 1" in text and "1.4 – T5" in text
+    assert "Doppelte PSP-Codes: 1" in text and "1.1 (2×)" in text and "[b.mpp]" in text
+    assert "Meilensteine mit Dauer > 0 (Quelldaten prüfen): 1" in text and "1.2 – T3 (4 d)" in text
+    assert "Dauer > 365 Tage" in text and "1.3 – T4 (500 d)" in text
+    assert len(w) == 4
+
+
+def test_duplicate_wbs_scope_file(monkeypatch):
+    from mpptool import config
+    monkeypatch.setattr(config, "WBS_DUPLICATE_SCOPE", "file")
+    recs = [TaskRecord(uid=u, name=u, department="AA", start=None, finish=None, baseline_finish=None,
+                       actual_finish=None, percent_complete=0, source_file=src, wbs="1.1", duration=1.0)
+            for u, src in (("a", "m.mpp"), ("b", "sub.mpp"))]
+    assert metrics.data_quality_warnings(recs) == []

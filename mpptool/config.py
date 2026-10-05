@@ -34,9 +34,19 @@ DB_PATH = DATA_DIR / "snapshots.sqlite"
 # <datei.mpp>` an einer echten Datei ermitteln und hier eintragen.
 DEPARTMENT_TEXT_FIELD_INDEX = 1
 
-# Fallback, wenn das Textfeld leer ist: Ressourcengruppe der ersten
-# zugewiesenen Ressource verwenden (MS Project "Group"-Feld der Ressource).
+# Quelle der Gruppierung (Fachabteilung) je Aufgabe:
+#   "resource_group" – ausschließlich die MS-Project-Ressourcengruppe (Besprechung:
+#                      Auswertung nur auf Ebene Ressourcengruppe, nie auf Personenebene)
+#   "text_field"     – Textfeld DEPARTMENT_TEXT_FIELD_INDEX, ggf. mit Fallback unten
+DEPARTMENT_SOURCE = "resource_group"
+
+# Nur bei DEPARTMENT_SOURCE = "text_field": wenn das Textfeld leer ist, die
+# Ressourcengruppe der ersten zugewiesenen Ressource verwenden.
 DEPARTMENT_FALLBACK_TO_RESOURCE_GROUP = True
+
+# Aufgaben ohne Ressourcengruppe nicht auswerten (Besprechung). Ihre Anzahl wird
+# in der Übersicht und beim Import ausgewiesen. False = als DEPARTMENT_UNKNOWN zählen.
+EXCLUDE_TASKS_WITHOUT_GROUP = True
 
 # Name für Aufgaben ohne erkennbare Abteilung.
 DEPARTMENT_UNKNOWN = "n/a"
@@ -83,6 +93,17 @@ EXCLUDE_MILESTONES = False
 EXCLUDE_ZERO_DURATION_NON_MILESTONES = True
 # Platzhalter-Zeilen für externe Aufgaben (MS Project "External Task")
 EXCLUDE_EXTERNAL_PLACEHOLDERS = True
+
+# --------------------------------------------------------------------------
+# Datenqualität (Hinweise beim Import)
+# --------------------------------------------------------------------------
+# Doppelte PSP-Codes suchen: "all" = über alle Dateien (Master + Unterdateien),
+# "file" = nur innerhalb derselben Datei (falls Unterdateien eigene, lokale PSP-Codes haben).
+WBS_DUPLICATE_SCOPE = "all"
+# Aufgaben mit auffällig langer Dauer (Tage) melden
+WARN_LONG_DURATION_DAYS = 365
+# max. Anzahl aufgelisteter Einträge je Hinweis
+WARN_LIST_LIMIT = 10
 
 # Anzahl der Abteilungen in der "Top-Overdues"-Vergleichstabelle
 TOP_N_OVERDUES = 5

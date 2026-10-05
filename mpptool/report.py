@@ -133,7 +133,7 @@ def _overdue_rows(review: Review, limit: int = 18) -> list[list[str]]:
     rows = []
     for t in review.overdue_list[:limit]:
         days = (review.current.as_of - t.finish).days if t.finish else 0
-        rows.append([t.department, t.name, t.finish.isoformat() if t.finish else "-", f"{days} d",
+        rows.append([t.department, t.wbs or "-", t.name, t.finish.isoformat() if t.finish else "-", f"{days} d",
                      f"{t.percent_complete:.0f} %"])
     return rows
 
@@ -149,8 +149,8 @@ def figure_overdue_list(review: Review, fig: Figure | None = None) -> Figure:
     if not rows:
         ax.text(0.5, 0.5, "Keine überfälligen Aufgaben", ha="center", va="center")
         return fig
-    tbl = ax.table(cellText=rows, colLabels=["Abteilung", "Aufgabe", "Geplantes Ende", "Verzug", "Fortschritt"],
-                   loc="upper center", cellLoc="left", colWidths=[0.12, 0.5, 0.14, 0.1, 0.12])
+    tbl = ax.table(cellText=rows, colLabels=["Abteilung", "PSP-Code", "Aufgabe", "Geplantes Ende", "Verzug", "Fortschritt"],
+                   loc="upper center", cellLoc="left", colWidths=[0.11, 0.1, 0.43, 0.13, 0.09, 0.11])
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(8)
     tbl.scale(1, 1.25)
@@ -172,7 +172,7 @@ def figure_kpis(review: Review, fig: Figure | None = None) -> Figure:
         ("Stichtag (Auswertungstag)", m.as_of.isoformat()),
         ("Überwachte Aufgaben", str(m.monitored)),
         ("davon Aufgaben (>0 Tage)", str(m.tasks_count)),
-        ("davon Meilensteine (0 Tage)", str(m.milestones_count)),
+        ("davon Meilensteine", str(m.milestones_count)),
         ("Geplant geschlossen", str(m.planned_closed)),
         ("Tatsächlich geschlossen", str(m.actually_closed)),
         ("Erfüllungsgrad", f"{m.fulfilment_pct:.1f} %"),
@@ -181,6 +181,7 @@ def figure_kpis(review: Review, fig: Figure | None = None) -> Figure:
         ("Hold", str(m.hold)),
         ("Cancelled", str(m.cancelled)),
         ("Fachabteilungen", str(len(m.departments))),
+        ("Ohne Ressourcengruppe", str(m.no_group_count)),
         ("Snapshots im Vergleich", str(len(review.metrics))),
     ]
     rows_per_col = 5
@@ -189,7 +190,7 @@ def figure_kpis(review: Review, fig: Figure | None = None) -> Figure:
         x = 0.03 + col * 0.34
         y = 0.8 - row * 0.16
         ax.text(x, y, k, fontsize=10, color="#555555", transform=ax.transAxes)
-        ax.text(x + 0.24, y, v, fontsize=13, fontweight="bold", transform=ax.transAxes)
+        ax.text(x + 0.2, y, v, fontsize=13, fontweight="bold", transform=ax.transAxes)
     return fig
 
 
@@ -251,7 +252,8 @@ def export_pptx(review: Review, path: str | Path) -> Path:
            ("davon Aufgaben (>0 Tage)", m.tasks_count), ("davon Meilensteine (0 Tage)", m.milestones_count),
            ("Geplant geschlossen", m.planned_closed), ("Tatsächlich geschlossen", m.actually_closed),
            ("Erfüllungsgrad", f"{m.fulfilment_pct:.1f} %"), ("Überfällig (offen)", m.open_overdue),
-           ("Verspätet geschlossen", m.closed_overdue), ("Hold", m.hold), ("Cancelled", m.cancelled)]
+           ("Verspätet geschlossen", m.closed_overdue), ("Hold", m.hold), ("Cancelled", m.cancelled),
+           ("Ohne Ressourcengruppe (nicht gezählt)", m.no_group_count)]
     _table(s, [["Kennzahl", "Wert"]] + [[k, str(v)] for k, v in kpi], Inches(0.6), Inches(1.3), Inches(6), [4.0, 2.0])
 
     # Chart-Folien
@@ -278,10 +280,10 @@ def export_pptx(review: Review, path: str | Path) -> Path:
     # Liste überfälliger Aufgaben
     s = prs.slides.add_slide(blank)
     _title(s, f"Überfällige Aufgaben – {review.cur_label} ({len(review.overdue_list)}){review.group_suffix}")
-    rows = [["Abteilung", "Aufgabe", "Geplantes Ende", "Verzug", "Fortschritt"]] + _overdue_rows(review, 16)
+    rows = [["Abteilung", "PSP-Code", "Aufgabe", "Geplantes Ende", "Verzug", "Fortschritt"]] + _overdue_rows(review, 16)
     if len(rows) == 1:
-        rows.append(["Keine überfälligen Aufgaben", "", "", "", ""])
-    _table(s, rows, Inches(0.5), Inches(1.2), Inches(12.3), [1.6, 6.5, 1.8, 1.2, 1.2], font=10)
+        rows.append(["Keine überfälligen Aufgaben", "", "", "", "", ""])
+    _table(s, rows, Inches(0.5), Inches(1.2), Inches(12.3), [1.5, 1.3, 5.3, 1.8, 1.2, 1.2], font=10)
 
     # Veränderungen seit Vorwoche
     if review.previous:
