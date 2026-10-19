@@ -26,6 +26,10 @@ from .model import Snapshot, TaskRecord
 SLIDE_W, SLIDE_H = Inches(13.333), Inches(7.5)   # 16:9
 FIG_SIZE = (12.5, 5.6)                             # Zoll, passend zur Folie
 
+_STATUS_GOOD = "#2ca02c"
+_STATUS_WARN = "#d4ac00"
+_STATUS_BAD = "#d62728"
+
 
 @dataclass
 class Review:
@@ -152,35 +156,79 @@ def figure_trend_table(review: Review, fig: Figure | None = None) -> Figure:
         f"{review.group_suffix}")
 
 
-def _overdue_rows(review: Review, limit: int = 18) -> list[list[str]]:
+def _overdue_rows(tasks: list[TaskRecord], as_of: date) -> list[list[str]]:
     rows = []
-    for t in review.overdue_list[:limit]:
-        days = (review.current.as_of - t.finish).days if t.finish else 0
+    for t in tasks:
+        days = (as_of - t.finish).days if t.finish else 0
         rows.append([t.department, t.wbs or "-", t.name, t.finish.isoformat() if t.finish else "-", f"{days} d",
                      f"{t.percent_complete:.0f} %"])
     return rows
 
 
-def figure_overdue_list(review: Review, fig: Figure | None = None) -> Figure:
-    fig = fig or Figure(figsize=FIG_SIZE)
-    fig.clear()
-    ax = fig.add_subplot(111)
-    ax.axis("off")
-    ax.set_title(f"Überfällige Aufgaben – {review.cur_label} ({len(review.overdue_list)}){review.group_suffix}",
-                 fontweight="bold", loc="left")
-    rows = _overdue_rows(review)
-    if not rows:
-        ax.text(0.5, 0.5, "Keine überfälligen Aufgaben", ha="center", va="center")
-        return fig
+def _draw_overdue_table(ax, rows: list[list[str]], fontsize: int = 8) -> None:
     tbl = ax.table(cellText=rows, colLabels=["Abteilung", "PSP-Code", "Aufgabe", "Geplantes Ende", "Verzug", "Fortschritt"],
                    loc="upper center", cellLoc="left", colWidths=[0.11, 0.1, 0.43, 0.13, 0.09, 0.11])
     tbl.auto_set_font_size(False)
-    tbl.set_fontsize(8)
+    tbl.set_fontsize(fontsize)
     tbl.scale(1, 1.25)
     for (r, c), cell in tbl.get_celld().items():
         if r == 0:
             cell.set_facecolor("#dddddd")
             cell.set_text_props(fontweight="bold")
+
+
+OVERDUE_ROWS_PER_PDF_PAGE = 18     # matplotlib-Tabelle (bisheriges Format, unverändert)
+OVERDUE_ROWS_PER_PPTX_SLIDE = 13   # native PPTX-Tabelle (feste Zeilenhöhe von 0.4")
+
+
+def overdue_pages(review: Review, page_size: int) -> list[list[TaskRecord]]:
+    """Überfällige Aufgaben in feste Seiten aufgeteilt – für PDF/PPTX, die (anders als
+    die scrollbare GUI-Vorschau) nicht scrollen können und sonst Zeilen jenseits der
+    ersten Seite stillschweigend verlieren würden."""
+    tasks = review.overdue_list
+    if not tasks:
+        return [[]]
+    return [tasks[i:i + page_size] for i in range(0, len(tasks), page_size)]
+
+
+def figure_overdue_list_page(review: Review, tasks: list[TaskRecord], page: int, total_pages: int,
+                             fig: Figure | None = None) -> Figure:
+    """Eine Export-Seite der Überfälligen-Liste mit fester Zeilenzahl (PDF/PPTX)."""
+    fig = fig or Figure(figsize=FIG_SIZE)
+    fig.clear()
+    ax = fig.add_subplot(111)
+    ax.axis("off")
+    suffix = f" – Seite {page + 1}/{total_pages}" if total_pages > 1 else ""
+    ax.set_title(f"Überfällige Aufgaben – {review.cur_label} ({len(review.overdue_list)}){review.group_suffix}{suffix}",
+                 fontweight="bold", loc="left")
+    rows = _overdue_rows(tasks, review.current.as_of)
+    if not rows:
+        ax.text(0.5, 0.5, "Keine überfälligen Aufgaben", ha="center", va="center")
+        return fig
+    _draw_overdue_table(ax, rows)
+    return fig
+
+
+def figure_overdue_list(review: Review, fig: Figure | None = None) -> Figure:
+    """GUI-Vorschau: die vollständige Liste in einer ausreichend hohen Figure – der Tab
+    stellt sie über eine Scrollbar dar (ChartTab), statt Zeilen abzuschneiden. PDF/PPTX
+    können nicht scrollen und zeigen dieselben Zeilen stattdessen seitenweise, siehe
+    ``overdue_pages``/``figure_overdue_list_page``."""
+    tasks = review.overdue_list
+    n = max(len(tasks), 1)
+    height = max(FIG_SIZE[1], 0.9 + n * 0.22)
+    fig = fig or Figure(figsize=(FIG_SIZE[0], height))
+    fig.set_size_inches(FIG_SIZE[0], height, forward=True)
+    fig.clear()
+    ax = fig.add_subplot(111)
+    ax.axis("off")
+    ax.set_title(f"Überfällige Aufgaben – {review.cur_label} ({len(tasks)}){review.group_suffix}",
+                 fontweight="bold", loc="left")
+    rows = _overdue_rows(tasks, review.current.as_of)
+    if not rows:
+        ax.text(0.5, 0.5, "Keine überfälligen Aufgaben", ha="center", va="center")
+        return fig
+    _draw_overdue_table(ax, rows, fontsize=9)
     return fig
 
 
@@ -191,29 +239,38 @@ def figure_kpis(review: Review, fig: Figure | None = None) -> Figure:
     ax = fig.add_subplot(111)
     ax.axis("off")
     ax.set_title(f"{config.REPORT_TITLE} – {review.project_name}", fontweight="bold", loc="left", fontsize=16)
+    # Erfüllungsgrad/Überfällig sind die beiden Werte, nach denen ein PJM-Review zuerst
+    # schaut – farblich hervorgehoben, damit ein kritischer Stand sofort auffällt statt
+    # zwischen 12 gleich aussehenden Zahlen unterzugehen.
+    fulfilment_color = (_STATUS_GOOD if m.fulfilment_pct >= 100 else
+                        _STATUS_WARN if m.fulfilment_pct >= 80 else _STATUS_BAD)
+    overdue_color = _STATUS_GOOD if m.open_overdue == 0 else _STATUS_BAD
     kpis = [
-        ("Stichtag (Auswertungstag)", m.as_of.isoformat()),
-        ("Überwachte Aufgaben", str(m.monitored)),
-        ("davon Aufgaben (>0 Tage)", str(m.tasks_count)),
-        ("davon Meilensteine", str(m.milestones_count)),
-        ("Geplant geschlossen", str(m.planned_closed)),
-        ("Tatsächlich geschlossen", str(m.actually_closed)),
-        ("Erfüllungsgrad", f"{m.fulfilment_pct:.1f} %"),
-        ("Überfällig (offen)", str(m.open_overdue)),
-        ("Verspätet geschlossen", str(m.closed_overdue)),
-        ("Hold", str(m.hold)),
-        ("Cancelled", str(m.cancelled)),
-        ("Fachabteilungen", str(len(m.departments))),
-        ("Ohne Ressourcengruppe", str(m.no_group_count)),
-        ("Snapshots im Vergleich", str(len(review.metrics))),
+        ("Stichtag (Auswertungstag)", m.as_of.isoformat(), None),
+        ("Überwachte Aufgaben", str(m.monitored), None),
+        ("davon Aufgaben (>0 Tage)", str(m.tasks_count), None),
+        ("davon Meilensteine", str(m.milestones_count), None),
+        ("Geplant geschlossen", str(m.planned_closed), None),
+        ("Tatsächlich geschlossen", str(m.actually_closed), None),
+        ("Erfüllungsgrad", f"{m.fulfilment_pct:.1f} %", fulfilment_color),
+        ("Überfällig (offen)", str(m.open_overdue), overdue_color),
+        ("Verspätet geschlossen", str(m.closed_overdue), None),
+        ("Hold", str(m.hold), None),
+        ("Cancelled", str(m.cancelled), None),
+        ("Fachabteilungen", str(len(m.departments)), None),
+        ("Ohne Ressourcengruppe", str(m.no_group_count), None),
+        ("Snapshots im Vergleich", str(len(review.metrics)), None),
     ]
+    # Label über Wert statt nebeneinander – so überlappt eine lange Bezeichnung nie mit
+    # der Zahl (bei fester Spaltenbreite kann das rechts danebenstehende Textfeld sonst
+    # mit langen Labels wie „Stichtag (Auswertungstag)“ kollidieren).
     rows_per_col = 5
-    for i, (k, v) in enumerate(kpis):
+    for i, (k, v, color) in enumerate(kpis):
         col, row = divmod(i, rows_per_col)
         x = 0.03 + col * 0.34
-        y = 0.8 - row * 0.16
+        y = 0.82 - row * 0.165
         ax.text(x, y, k, fontsize=10, color="#555555", transform=ax.transAxes)
-        ax.text(x + 0.2, y, v, fontsize=13, fontweight="bold", transform=ax.transAxes)
+        ax.text(x, y - 0.065, v, fontsize=15, fontweight="bold", color=color or "#111111", transform=ax.transAxes)
     return fig
 
 
@@ -236,7 +293,14 @@ def export_pdf(review: Review, path: str | Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(str(path)) as pdf:
         for _title, builder in SLIDE_BUILDERS:
+            if builder is figure_overdue_list:
+                continue   # seitenweise statt abgeschnitten, siehe unten
             fig = builder(review, Figure(figsize=(13.333, 7.5)))
+            _footer_fig(fig, review)
+            pdf.savefig(fig)
+        pages = overdue_pages(review, OVERDUE_ROWS_PER_PDF_PAGE)
+        for i, chunk in enumerate(pages):
+            fig = figure_overdue_list_page(review, chunk, i, len(pages), Figure(figsize=(13.333, 7.5)))
             _footer_fig(fig, review)
             pdf.savefig(fig)
         d = pdf.infodict()
@@ -278,7 +342,14 @@ def export_pptx(review: Review, path: str | Path) -> Path:
            ("Erfüllungsgrad", f"{m.fulfilment_pct:.1f} %"), ("Überfällig (offen)", m.open_overdue),
            ("Verspätet geschlossen", m.closed_overdue), ("Hold", m.hold), ("Cancelled", m.cancelled),
            ("Ohne Ressourcengruppe (nicht gezählt)", m.no_group_count)]
-    _table(s, [["Kennzahl", "Wert"]] + [[k, str(v)] for k, v in kpi], Inches(0.6), Inches(1.3), Inches(6), [4.0, 2.0])
+    kpi_shape = _table(s, [["Kennzahl", "Wert"]] + [[k, str(v)] for k, v in kpi],
+                       Inches(0.6), Inches(1.3), Inches(6), [4.0, 2.0])
+    # Erfüllungsgrad/Überfällig farblich hervorheben – wie in Vorschau/PDF (figure_kpis)
+    fulfilment_color = (_STATUS_GOOD if m.fulfilment_pct >= 100 else
+                        _STATUS_WARN if m.fulfilment_pct >= 80 else _STATUS_BAD)
+    overdue_color = _STATUS_GOOD if m.open_overdue == 0 else _STATUS_BAD
+    _color_table_cell(kpi_shape.table, 1 + [k for k, _ in kpi].index("Erfüllungsgrad"), 1, fulfilment_color)
+    _color_table_cell(kpi_shape.table, 1 + [k for k, _ in kpi].index("Überfällig (offen)"), 1, overdue_color)
 
     # Chart-Folien
     for title, builder in [("Master Timeline", figure_timeline),
@@ -301,13 +372,18 @@ def export_pptx(review: Review, path: str | Path) -> Path:
         rows.append(["Keine überfälligen Aufgaben", "", "", "", ""])
     _table(s, rows, Inches(0.6), Inches(1.3), Inches(9), [3.0, 1.4, 1.4, 1.4, 1.8], font=14)
 
-    # Liste überfälliger Aufgaben
-    s = prs.slides.add_slide(blank)
-    _title(s, f"Überfällige Aufgaben – {review.cur_label} ({len(review.overdue_list)}){review.group_suffix}")
-    rows = [["Abteilung", "PSP-Code", "Aufgabe", "Geplantes Ende", "Verzug", "Fortschritt"]] + _overdue_rows(review, 16)
-    if len(rows) == 1:
-        rows.append(["Keine überfälligen Aufgaben", "", "", "", "", ""])
-    _table(s, rows, Inches(0.5), Inches(1.2), Inches(12.3), [1.5, 1.3, 5.3, 1.8, 1.2, 1.2], font=10)
+    # Liste überfälliger Aufgaben – seitenweise, damit bei vielen Überfälligen keine
+    # Zeilen stillschweigend von der Folie fallen (PPTX kann nicht scrollen)
+    pages = overdue_pages(review, OVERDUE_ROWS_PER_PPTX_SLIDE)
+    for i, chunk in enumerate(pages):
+        s = prs.slides.add_slide(blank)
+        suffix = f" – Seite {i + 1}/{len(pages)}" if len(pages) > 1 else ""
+        _title(s, f"Überfällige Aufgaben – {review.cur_label} ({len(review.overdue_list)}){review.group_suffix}{suffix}")
+        rows = [["Abteilung", "PSP-Code", "Aufgabe", "Geplantes Ende", "Verzug", "Fortschritt"]]
+        rows += _overdue_rows(chunk, review.current.as_of)
+        if len(rows) == 1:
+            rows.append(["Keine überfälligen Aufgaben", "", "", "", "", ""])
+        _table(s, rows, Inches(0.5), Inches(1.2), Inches(12.3), [1.5, 1.3, 5.3, 1.8, 1.2, 1.2], font=10)
 
     # Veränderungen seit Vorwoche
     if review.previous:
@@ -369,3 +445,8 @@ def _table(slide, rows: list[list[str]], x, y, w, col_inches: list[float], font:
                 elif r > 0 and c == len(row) - 1 and str(val).startswith("▼"):
                     p.font.color.rgb = RGBColor(0x2C, 0xA0, 0x2C)
     return shape
+
+
+def _color_table_cell(tbl, r: int, c: int, hex_color: str) -> None:
+    for p in tbl.cell(r, c).text_frame.paragraphs:
+        p.font.color.rgb = RGBColor.from_string(hex_color.lstrip("#"))

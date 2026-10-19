@@ -24,7 +24,27 @@ def test_review_and_exports(tmp_path):
     assert pptx.stat().st_size > 10_000
     assert pdf.stat().st_size > 10_000
     from pptx import Presentation
-    assert len(Presentation(str(pptx)).slides) == 9
+    # Fixe Folien (Titel, Übersicht, 4 Charts, Trend-Tabelle, Veränderungen) + eine
+    # Folie je Seite der Überfälligen-Liste (seitenweise, damit keine Zeilen fehlen)
+    overdue_slides = len(report.overdue_pages(rv, report.OVERDUE_ROWS_PER_PPTX_SLIDE))
+    assert len(Presentation(str(pptx)).slides) == 8 + overdue_slides
+
+
+def test_overdue_list_paginates_without_dropping_rows(tmp_path):
+    """Mit vielen überfälligen Aufgaben dürfen PDF/PPTX keine Zeilen stillschweigend
+    abschneiden – sie werden stattdessen auf mehrere Seiten/Folien verteilt."""
+    rv = report.build_review(demo_data.generate_snapshots(weeks=4), "Test")
+    assert len(rv.overdue_list) > report.OVERDUE_ROWS_PER_PDF_PAGE   # Testdaten erzwingen Pagination
+
+    pdf_pages = report.overdue_pages(rv, report.OVERDUE_ROWS_PER_PDF_PAGE)
+    assert sum(len(p) for p in pdf_pages) == len(rv.overdue_list)
+
+    pptx_pages = report.overdue_pages(rv, report.OVERDUE_ROWS_PER_PPTX_SLIDE)
+    assert sum(len(p) for p in pptx_pages) == len(rv.overdue_list)
+
+    # GUI-Vorschau zeigt alle Zeilen in einer Figure (dargestellt über eine Scrollbar)
+    fig = report.figure_overdue_list(rv)
+    assert len(fig.axes[0].tables[0].get_celld()) == (len(rv.overdue_list) + 1) * 6   # +1 Kopfzeile, 6 Spalten
 
 
 def test_store_keeps_native_duration(tmp_path):

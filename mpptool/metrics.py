@@ -121,6 +121,11 @@ def classify(task: TaskRecord, as_of: date) -> TaskStatus:
         return TaskStatus.CANCELLED
     if (config.USE_NATIVE_ACTIVE_FLAG_FOR_HOLD and not task.is_active) or task.hold_flag:
         return TaskStatus.HOLD
+    # Referenz für "verspätet geschlossen": bewusst Basisplan-Ende (fester Punkt), nicht
+    # das aktuelle geplante Ende – bei einer abgeschlossenen Aufgabe wird ``finish`` in
+    # MS Project auf das tatsächliche Ende gesetzt, ein Vergleich actual > finish wäre
+    # dann immer falsch. Unabhängig von der Planlinien-Entscheidung unten (die betrifft
+    # nur, wie viele Aufgaben laut Plan bis zum Stichtag geschlossen sein sollten).
     reference_finish = task.baseline_finish or task.finish
     if task.is_complete:
         actual = task.actual_finish or task.finish
@@ -226,7 +231,10 @@ def compute_metrics(snapshot: Snapshot, as_of: date | None = None) -> SnapshotMe
         else:
             tasks_count += 1
 
-        ref = t.baseline_finish or t.finish
+        # "Geplant geschlossen" (-> Erfüllungsgrad) nutzt den aktuellen Plan (geplantes
+        # Ende), nicht den Basisplan – Besprechungsentscheidung, konsistent mit der
+        # Planlinie der Master Timeline (master_timeline() in diesem Modul).
+        ref = t.finish
         if ref and ref <= as_of and st not in (TaskStatus.HOLD, TaskStatus.CANCELLED):
             planned_closed += 1
         if st.is_closed:

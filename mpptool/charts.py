@@ -127,7 +127,7 @@ def draw_master_timeline(fig: Figure, points: list[WeekPoint], title: str = "Mas
         status = f"{week_label(p.start, True)}: geplant geschlossen (aktueller Plan) {p.planned_closed}"
         if p.actual_closed is not None:
             status += (f"  ·  tatsächlich geschlossen {p.actual_closed}  ·  überwacht {p.monitored}"
-                       f"  ·  Erfüllungsgrad (Basisplan) {p.fulfilment_pct:.0f} %")
+                       f"  ·  Erfüllungsgrad (aktueller Plan) {p.fulfilment_pct:.0f} %")
         status += f"  ·  Zeitraumende {week_label(points[-1].start, True)}: {points[-1].planned_closed} geplant geschlossen"
         fig.text(0.5, 0.015, status, ha="center", va="bottom", fontsize=8.5, color=LABEL_INK)
     return fig

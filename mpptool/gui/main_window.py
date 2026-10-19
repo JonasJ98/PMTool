@@ -6,11 +6,11 @@ from pathlib import Path
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, Qt, QThread, Signal
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDateEdit, QDialog, QDialogButtonBox,
-                               QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QScrollArea, QSplitter,
+from PySide6.QtWidgets import (QAbstractItemView, QDateEdit, QDialog, QDialogButtonBox, QFileDialog,
+                               QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+                               QMainWindow, QMessageBox, QProgressDialog, QPushButton, QScrollArea, QSplitter,
                                QStatusBar, QTabWidget, QVBoxLayout, QWidget)
 
 from .. import config, demo_data, metrics, report
@@ -61,6 +61,27 @@ def _pydate(q: QDate) -> date:
     return date(q.year(), q.month(), q.day())
 
 
+class ImportWorker(QThread):
+    """Liest eine MS-Project-Datei im Hintergrund (JVM-Start + MPXJ-Parsing können bei
+    großen Master-Dateien mit vielen Unterdateien mehrere Sekunden dauern – ohne
+    Hintergrund-Thread friert währenddessen die ganze Oberfläche ein)."""
+    loaded = Signal(object, list)
+    failed = Signal(str)
+
+    def __init__(self, path: Path, parent=None):
+        super().__init__(parent)
+        self.path = path
+
+    def run(self) -> None:
+        try:
+            from ..reader import read_snapshot
+            snap, warnings = read_snapshot(self.path)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.loaded.emit(snap, warnings)
+
+
 class ChartTab(QWidget):
     PX_PER_WEEK = 16      # Master Timeline: ab dieser Dichte horizontal scrollen
 
@@ -77,6 +98,7 @@ class ChartTab(QWidget):
         lay.addWidget(self.scroll)
 
     def render(self, review: report.Review | None) -> None:
+        self.figure.set_size_inches(*report.FIG_SIZE, forward=False)
         self.figure.clear()
         # lange Zeitachsen (Master Timeline) horizontal scrollbar machen
         weeks = len(review.week_points) if review is not None and self.builder is report.figure_timeline else 0
@@ -88,6 +110,13 @@ class ChartTab(QWidget):
             ax.axis("off")
             ax.text(0.5, 0.5, "Snapshots links auswählen und „Vorschau aktualisieren“ klicken",
                     ha="center", va="center", color="#777777")
+        # lange Überfälligen-Liste vertikal scrollbar machen (figure_overdue_list vergrößert
+        # die Figure ggf. auf die volle Zeilenzahl, statt Zeilen abzuschneiden)
+        if self.builder is report.figure_overdue_list:
+            dpi = self.figure.dpi
+            self.canvas.setMinimumHeight(int(self.figure.get_figheight() * dpi))
+        else:
+            self.canvas.setMinimumHeight(0)
         self.canvas.draw_idle()
 
 
@@ -101,6 +130,7 @@ class MainWindow(QMainWindow):
         self._snap_cache: dict[int, Snapshot] = {}
         self._filling_groups = False
         self._setting_dates = False
+        self._import_worker: ImportWorker | None = None
         self._build_ui()
         self._build_menu()
         self.refresh_snapshot_list()
@@ -276,17 +306,42 @@ class MainWindow(QMainWindow):
             "MS Project (*.mpp *.xml *.mpx *.mpt);;Alle Dateien (*)")
         if not path:
             return
-        p = Path(path)
-        try:
-            from ..reader import read_snapshot
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            try:
-                snap, warnings = read_snapshot(p)
-            finally:
-                QApplication.restoreOverrideCursor()
-        except Exception as exc:
-            QMessageBox.critical(self, "Import fehlgeschlagen", str(exc))
-            return
+        self._start_import(Path(path))
+
+    def _start_import(self, p: Path) -> None:
+        # Import läuft im Hintergrund-Thread (JVM-Start + MPXJ-Parsing können bei großen
+        # Master-Dateien mehrere Sekunden dauern) – währenddessen eine Fortschrittsanzeige
+        # statt eines nur per Wait-Cursor "eingefrorenen" Fensters.
+        self.btn_import.setEnabled(False)
+        progress = QProgressDialog(
+            f"Importiere {p.name}…\n(beim ersten Import startet zusätzlich die Java-Laufzeit"
+            " – das kann einen Moment dauern)", None, 0, 0, self)
+        progress.setWindowTitle("Import läuft")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        progress.show()
+
+        worker = ImportWorker(p, self)
+        self._import_worker = worker   # Referenz halten, sonst wird der Thread vorzeitig freigegeben
+
+        def on_loaded(snap, warnings) -> None:
+            progress.close()
+            self.btn_import.setEnabled(True)
+            self._import_worker = None
+            self._finish_import(p, snap, warnings)
+
+        def on_failed(message: str) -> None:
+            progress.close()
+            self.btn_import.setEnabled(True)
+            self._import_worker = None
+            QMessageBox.critical(self, "Import fehlgeschlagen", message)
+
+        worker.loaded.connect(on_loaded)
+        worker.failed.connect(on_failed)
+        worker.start()
+
+    def _finish_import(self, p: Path, snap: Snapshot, warnings: list[str]) -> None:
         dlg = ImportDialog(p, snap.snapshot_date, self, snap.date_source)
         if dlg.exec() != QDialog.Accepted:
             return
@@ -460,5 +515,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Exportiert: {path}")
 
     def closeEvent(self, event) -> None:
+        if self._import_worker is not None:
+            self._import_worker.wait()
         self.store.close()
         super().closeEvent(event)
