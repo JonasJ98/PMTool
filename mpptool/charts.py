@@ -92,6 +92,9 @@ def draw_master_timeline(fig: Figure, points: list[WeekPoint], title: str = "Mas
     fs = 8 if n <= 30 else 6.5
     rot = 0 if len(snap) <= 12 else 90
     for i in snap:
+        ax.annotate(str(points[i].monitored), (i - w / 2, points[i].monitored), xytext=(0, 2),
+                    textcoords="offset points", ha="center", va="bottom", fontsize=fs, rotation=rot,
+                    color=LABEL_INK, fontweight="bold", zorder=6)
         v = points[i].actual_closed
         ax.annotate(str(v), (i + w / 2, v), xytext=(0, 2), textcoords="offset points", ha="center",
                     va="bottom", fontsize=fs, rotation=rot, color=COLORS["closed"], fontweight="bold", zorder=6)
@@ -102,10 +105,21 @@ def draw_master_timeline(fig: Figure, points: list[WeekPoint], title: str = "Mas
         ax.axvline(ev, color="#555555", ls="--", lw=1, zorder=2)
         ax.annotate(f"Auswertung {points[ev].label}", (ev, top * 1.12), xytext=(4, 0), textcoords="offset points",
                     fontsize=8, color="#555555", va="top")
-    for i in {ev, n - 1} - {None}:
+
+    # Planlinie: jede Woche mit echtem Informationsgehalt beschriften (Anfang, Ende,
+    # Snapshot-/Auswertungswochen sowie jede Änderung ggü. der Vorwoche) – eine lange
+    # Kette identischer Wochenwerte zwischen zwei Terminänderungen nur mit der immer
+    # gleichen Zahl zu bekleben, wäre reiner Ziffernspam ohne Zusatzinformation.
+    plan_label_idx = {0, n - 1, *snap}
+    if ev is not None:
+        plan_label_idx.add(ev)
+    plan_label_idx |= {i for i in range(1, n) if points[i].planned_closed != points[i - 1].planned_closed}
+    line_fs = 8 if len(plan_label_idx) <= 30 else 6.5
+    line_rot = 0 if len(plan_label_idx) <= 12 else 90
+    for i in sorted(plan_label_idx):
         v = points[i].planned_closed
         ax.annotate(str(v), (i, v), xytext=(0, 6), textcoords="offset points", ha="center", va="bottom",
-                    fontsize=fs, color=COLORS["planned_line"], fontweight="bold", zorder=6)
+                    fontsize=line_fs, rotation=line_rot, color=COLORS["planned_line"], fontweight="bold", zorder=6)
 
     step = max(1, math.ceil(n / 26))
     ticks = list(range(0, n, step))
